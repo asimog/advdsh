@@ -22,6 +22,28 @@
   <div id="status"></div>
   <script src="/workspace-editor/shim.js"></script>
   <script src="/workspace-editor/app/web-apps/apps/api/documents/api.js"></script>
+  <script>
+    // Review mode: the editor opens with tracked changes rendered and the
+    // lawyer able to accept or reject them. DocsAPI fills missing config from
+    // defaultConfig, so these defaults reach boot.js's editor config without a
+    // second copy of that config here.
+    (function () {
+      'use strict'
+      var DocsAPI = window.DocsAPI
+      if (!DocsAPI || !DocsAPI.DocEditor || !DocsAPI.DocEditor.defaultConfig) return
+      var defaults = DocsAPI.DocEditor.defaultConfig
+      defaults.editorConfig = defaults.editorConfig || {}
+      defaults.editorConfig.customization = defaults.editorConfig.customization || {}
+      defaults.editorConfig.customization.review = {
+        trackChanges: true,
+        reviewDisplay: 'markup',
+        showReviewChanges: true,
+      }
+      defaults.document = defaults.document || {}
+      defaults.document.permissions = defaults.document.permissions || {}
+      defaults.document.permissions.review = true
+    })()
+  </script>
   <script src="/workspace-editor/boot.js"></script>
 </body>
 </html>
