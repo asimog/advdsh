@@ -18,7 +18,8 @@ Which official EuroOffice or EuroOfficeLite method should the DSH workspace edit
 | Pinned-fetch vendoring | `vendor/euro-office/manifest.json` + `scripts/vendor-euro-office.ps1`; `-VerifyOnly` on `resources/euro-office`: 5,907 files, 216.8 MB, `index.html` sha256 matches the manifest | VERIFIED |
 | Official EuroOffice components | Org repos: `core` (x2t), `sdkjs` (engine/editor JS), `web-apps` (UI), `server`/`DocumentServer` (backend incl. conversion and document builder) | VERIFIED |
 | Document Builder exists in the Lite build | `resources/euro-office/sdkjs/word/apiBuilder.js`, 1.14 MB browser IIFE; the release tree `resources/euro-office-de` does not ship it | VERIFIED |
-| Document Builder headless support | Proven in `spike/s0/docbuilder`: Electron 44.7.0 hid a window, loaded the official builder, replaced a paragraph, inserted a numbered list item and a table row, saved through x2t, and verified the markers (`spike/s0/docbuilder/REPORT.md`, `out/verification.json`) | VERIFIED |
+| Document Builder headless support | Proven in `spike/s0/docbuilder` (Electron 44.7.0) and independently in `spike/s0/builder-headless` (headless Chromium via `dsh-browser`, same `AscBuilder.Word.Api` object as `Asc.editor.getJsApi()`): open, edit, insert numbered list item and table row, x2t save, all markers verified; the Chromium run reopened the DOCX in the Lite editor (2.58 s total) | VERIFIED |
+| Document Builder track changes | `apiBuilder.js` exposes `ApiDocument.SetTrackRevisions(isTrack)`; a saved DOCX carrying agent-authored revisions is not yet exercised | UNTESTED |
 | Tauri/Rust backend | Not usable inside DSH; only its `bridge.js`, patches and x2t workflow transfer | VERIFIED |
 
 ## Methods
@@ -87,5 +88,5 @@ Script behaviour:
 
 - The Lite develop build compiles LESS at runtime; the first open is slower than the release build. The release frontend remains available as an override after a version-match check.
 - The Tauri/Rust backend is not used; window, printing, dictionary and file-dialog behavior from Lite is reimplemented or omitted.
-- Document Builder API coverage for tracked changes is unproven; the tracked-change commit may need an OOXML serializer or the editor's review commands.
+- Document Builder tracked changes are exposed (`SetTrackRevisions`) but not yet proven in a saved DOCX; S1 verifies revisions and agent authorship. The fallback is the D2 OOXML serializer.
 - The Lite tree is large (216.8 MB); it is fetched by `scripts/vendor-euro-office.ps1` from the pins in `vendor/euro-office/manifest.json` and never committed. Rebuilding needs network access for the clone, `npm ci` and the font downloads.

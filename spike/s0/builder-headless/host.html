@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #1e1e2e; }
+    #placeholder { position: absolute; inset: 0; }
+    #status {
+      position: fixed; inset: 0; z-index: 1000; display: none;
+      align-items: center; justify-content: center; text-align: center;
+      padding: 24px; color: #cdd6f4; font: 13px/1.5 'Segoe UI', system-ui, sans-serif;
+      background: rgba(30, 30, 46, 0.94);
+    }
+    #status.active { display: flex; }
+  </style>
+</head>
+<body>
+  <div id="placeholder"></div>
+  <div id="status"></div>
+  <script src="/workspace-editor/shim.js"></script>
+  <script src="/workspace-editor/app/web-apps/apps/api/documents/api.js"></script>
+  <script src="/workspace-editor/boot.js"></script>
+  <script src="/workspace-editor/builder-run.js"></script>
+</body>
+</html>

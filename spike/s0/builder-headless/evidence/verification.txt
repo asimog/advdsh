@@ -1,0 +1,9 @@
+output DOCX: C:\dev\advodsh\spike\s0\builder-headless\out\TRO - Motion.builder.docx (31877 bytes)
+document.xml: well-formed XML; 43761 bytes
+body paragraphs: 18; tables: 1; table rows: 2
+marker BUILDER-HEADLESS-EDIT: 1 occurrence in word/document.xml
+marker BUILDER-HEADLESS-LIST-ITEM: 1 occurrence in word/document.xml
+marker BUILDER-HEADLESS-TABLE-ROW: 1 occurrence in word/document.xml
+w:numPr elements in document.xml: 1
+numbering.xml w:num definitions: 2
+list-item context: ...<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Times New Roman" w:cs="Times New Roman" /><w:i/><w:color w:val="000000" /><w:sz w:val="28" /><w:szCs w:val="28" /><w:lang w:bidi="gu-IN" /></w:rPr></w:r></w:p><w:p w14:paraId="3ADC6AA6"><w:pPr><w:numPr><w:ilvl w:val="0" /><w:numId w:val="2" /></w:numPr><w:pBdr></w:pBdr><w:spacing /><w:ind /><w:rPr></w:rPr></w:pPr><w:r><w:t xml:space="preserve">BUILDER-HEADLESS-LIST-ITEM</w:t></w:r><w:r></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rId9"/><w:footnotePr></w:footnote

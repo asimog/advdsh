@@ -1,0 +1,30 @@
+=== main run: http://127.0.0.1:8791/start (headless Chromium via dsh-browser) ===
+[builder-headless] listening on http://127.0.0.1:8791
+[builder-headless] frontend: C:\dev\advodsh\resources\euro-office
+[builder-headless] converter: C:\Users\Rahul Khatri\AppData\Local\advodsh-eo\converter\x2t.exe
+[builder-headless] docx -> bin in 117 ms (39166 bytes)
+[builder-headless] page: app ready
+[builder-headless] page: fonts patched: 389 entries (loaded on demand)
+[builder-headless] page: document opened: TRO - Motion.docx (39166 bytes, attempt 1)
+[builder-headless] page: builder-api-found: {"hasAscBuilder":true,"hasWord":true,"sameAsEditorJsApi":true}
+[builder-headless] page: api-surface: {"GetDocument":"function","CreateParagraph":"function","CreateTable":"function","CreateNumbering":"function","Save":"function","documentCreateNumbering":"function","paragraphSetNumbering":"function","tableAddRow":"function","asc_nativeGetFile":"function"}
+[builder-headless] page: document ready
+[builder-headless] page: content-ready: {"paragraphs":25}
+[builder-headless] page: paragraph-edited: {"before":"Plaintiff MAH Advising, PLLC, seeks entry of an ex parte temporary restraining order inclu","after":"Plaintiff MAH Advising, PLLC, seeks entry of an ex parte temporary restraining order including a temporary injunction ordering Def","containsMarker":true}
+[builder-headless] page: list-item-inserted: {"numberingCreated":true,"numberingSet":true,"pushed":true,"text":"·	BUILDER-HEADLESS-LIST-ITEM\r\n","hasNumbering":true}
+[builder-headless] page: table-row-inserted: {"rowsBefore":1,"rowsAfter":2,"rowText":"BUILDER-HEADLESS-TABLE-ROW\t","inserted":true}
+[builder-headless] page: serialized: {"rawType":"string","bytes":374879}
+[builder-headless] save request: 374879 bytes of Editor.bin
+[builder-headless] bin -> docx in 129 ms (31877 bytes) -> C:\dev\advodsh\spike\s0\builder-headless\out\TRO - Motion.builder.docx
+[builder-headless] page: saved: {"path":"C:\\dev\\advodsh\\spike\\s0\\builder-headless\\out\\TRO - Motion.builder.docx","size":31877,"ms":129}
+[builder-headless] result written to C:\dev\advodsh\spike\s0\builder-headless\result.json
+
+=== reopen: http://127.0.0.1:8792/start?page=reopen (saved DOCX reopened in EuroOffice Lite) ===
+[builder-headless] docx -> bin in 160 ms (257964 bytes)
+[builder-headless] page: app ready
+[builder-headless] page: fonts patched: 389 entries (loaded on demand)
+[builder-headless] page: document opened: TRO - Motion.builder.docx (257964 bytes, attempt 1)
+[builder-headless] page: document ready
+
+=== result.json (PASS, totalMs 2582) ===
+status=PASS; builder-api-found ms=1786; content-ready ms=2402; paragraph-edited ms=2403; list-item-inserted ms=2406; table-row-inserted ms=2409; serialized ms=2442; saved ms=2582; error=null
