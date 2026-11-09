@@ -17,7 +17,6 @@
   },
   "files": [
     "lib/index.js",
-    "lib/engine/index.js",
     "lib/model/index.js",
     "lib/tools/index.js",
     "lib/fanout/index.js",
@@ -30,7 +29,8 @@
     "lib/editor/boot.js",
     "lib/client.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "lib/engine/**"
   ],
   "engines": {
     "dsh": ">=0.2.0 <0.3.0"

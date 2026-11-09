@@ -1,0 +1,8 @@
+{
+  "name": "workspace-editor-engine-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hidden-Electron Document Builder sidecar for workspace-editor's ctx.docxEngine",
+  "main": "main.js",
+  "type": "commonjs"
+}

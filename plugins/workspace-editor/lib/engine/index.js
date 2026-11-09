@@ -1,63 +1,72 @@
 /**
- * `workspace-docx-engine` row: the deterministic document engine seam.
+ * `workspace-docx-engine` row: the deterministic document engine behind
+ * `ctx.docxEngine`, implemented as a managed hidden-Electron Document Builder
+ * sidecar.
  *
- * Placeholder until the S1 engine is chosen (sdkjs Document Builder, or the
- * reduced model with x2t). Every method rejects with `EngineUnavailableError`,
- * so a consumer fails loud instead of editing nothing. The module has no
- * imports on purpose: it must load before the model, tools, fan-out and review
- * rows, and it must never pull in a writer or a native binary by itself.
+ * The sidecar runs the official sdkjs Word Document Builder in the vendored
+ * Euro-Office Lite editor page; x2t converts DOCX↔Editor.bin. The manager owns
+ * one child process, request ids, per-request timeout/cancel, a crash log and
+ * restart, and an awaited exit on dispose. Every method rejects with an
+ * `EngineError` carrying a stable `code`; automation never shows a modal dialog.
+ *
+ * Work only in `plugins/workspace-editor/lib/engine/`: the row, manager, block
+ * diff, path resolution, the sidecar host app and the verification harness live
+ * there.
  */
+import { EngineError, EngineUnavailableError } from './errors.js'
+import { resolveEngineConfig } from './locate.js'
+import { createDocxEngine } from './manager.js'
 
-/** Rejection of every `docxEngine` method until an engine implementation replaces this stub. */
-export class EngineUnavailableError extends Error {
-  /**
-   * @param operation — the engine method that was called.
-   */
-  constructor(operation) {
-    super(`docxEngine.${operation} is unavailable: no DOCX engine is wired`)
-    this.name = 'EngineUnavailableError'
-    /** Stable code for tool results and tests. */
-    this.code = 'ENGINE_UNAVAILABLE'
-    /** The engine method that rejected. */
-    this.operation = operation
-  }
-}
+export { EngineError, EngineUnavailableError, ENGINE_CODES } from './errors.js'
+export { createDocxEngine } from './manager.js'
+export { resolveEngineConfig } from './locate.js'
+export { diffBlocks } from './diff.js'
 
 export const name = 'workspace-docx-engine'
+/** The sidecar is spawned through the DSH subprocess seam. */
+export const inject = ['subprocess']
 
 /**
- * Provide the stub engine as `ctx.docxEngine`.
+ * Provide the engine as `ctx.docxEngine` and own the sidecar lifetime.
  *
- * The row declares no injection, so it loads without the filesystem, subprocess
- * or editor services and unloads by dropping the provided service.
+ * The provided service is the six-method surface the stub declared:
+ * `open`, `describe`, `apply`, `diff`, `save`, `close`. `status()` is an
+ * additional read-only fact for the `editor` tool; the manager itself is not
+ * exposed.
  *
- * @param ctx — the row's Cordis context; only `provide` is used.
+ * @param {import('@deepseek-ai/cordis').Context} ctx - the row's Cordis context.
  */
 export function apply(ctx) {
-  ctx.provide('docxEngine', {
-    /** Open a path or byte buffer as an engine session. */
-    async open() {
-      throw new EngineUnavailableError('open')
-    },
-    /** Describe an open session: blocks, IDs, outline and revision facts. */
-    async describe() {
-      throw new EngineUnavailableError('describe')
-    },
-    /** Apply one atomic operation to a session. */
-    async apply() {
-      throw new EngineUnavailableError('apply')
-    },
-    /** Diff the immutable base against the working state. */
-    async diff() {
-      throw new EngineUnavailableError('diff')
-    },
-    /** Serialize the working state, tracked when requested. */
-    async save() {
-      throw new EngineUnavailableError('save')
-    },
-    /** Close a session; idempotent once implemented. */
-    async close() {
-      throw new EngineUnavailableError('close')
-    },
-  })
+  const config = resolveEngineConfig()
+  const engine = createDocxEngine(config, { runtime: ctx.subprocess })
+  const missing = config.missing ?? []
+  if (missing.length > 0) {
+    console.error(`[workspace-docx-engine] sidecar not configured: ${missing.join('; ')}`)
+  }
+
+  /** Teardown the process before the service disappears. */
+  ctx.effect(() => () => engine.dispose(), 'workspace-editor.docxEngine.lifecycle')
+
+  const service = {
+    /**
+     * Open a DOCX path or byte buffer.
+     * @param {{ path?: string, bytes?: Buffer|Uint8Array|ArrayBuffer|string, name?: string }} input - document source.
+     * @param {{ author?: string, timeoutMs?: number, signal?: AbortSignal }} [options] - tracked-change author and deadline.
+     */
+    open: (input, options) => engine.open(input, options),
+    /** @param {string} sessionId - engine session. @param {object} [options] - deadline/cancel. */
+    describe: (sessionId, options) => engine.describe(sessionId, options),
+    /** @param {string} sessionId - engine session. @param {object} op - curated op. @param {object} [options] - deadline/cancel. */
+    apply: (sessionId, op, options) => engine.apply(sessionId, op, options),
+    /** @param {string} sessionId - engine session. @param {object} [options] - deadline/cancel. */
+    diff: (sessionId, options) => engine.diff(sessionId, options),
+    /** @param {string} sessionId - engine session. @param {{ targetPath?: string }} [options] - save destination. */
+    save: (sessionId, options) => engine.save(sessionId, options),
+    /** @param {string} sessionId - engine session. @param {object} [options] - deadline/cancel. */
+    close: (sessionId, options) => engine.close(sessionId, options),
+    /** Read-only engine sidecar facts. */
+    status: () => engine.status(),
+  }
+
+  ctx.effect(() => ctx.provide('docxEngine', service), 'workspace-editor.docxEngine.service')
 }
