@@ -1,7 +1,13 @@
 # workspace-editor
 
 Stage 6: the Euro-Office document editor as a right-sidebar tab in the DSH
-window, with an agent tool that edits the same file.
+window, with an agent tool that edits the same file and a right-click selection
+gesture that stages document text into the chat composer.
+
+The vendored Euro-Office **Lite** frontend (`resources/euro-office`) is the
+default because it ships the Document Builder the agent engine uses. The
+release frontend (`resources/euro-office-de/editors`) is an override for a
+version-matched performance run: set `WORKSPACE_EDITOR_FRONTEND` to it.
 
 ## Which components are used
 
@@ -63,6 +69,27 @@ unsaved work.
   (`sidebar.right.tab.document.actions`); it opens the editor tab with the file.
 - Tab body: file name, **Reload**, **Export PDF**, and the host page in an
   iframe.
+- Right-click on a non-empty selection inside the editor: the host page relays
+  the selection; the tab opens the shared DSH context menu with **Send to
+  chat**, **Ask agent** and **Copy**. Send/Ask stage a Markdown quote plus the
+  document path, revision and dirty flag through the session's composer input
+  (`insertQuote`, `focus`, `submit`); Copy uses the clipboard.
+
+## Bundle rows (`cordis.patch.yml`)
+
+One package inserts several Cordis rows, one `engines.dsh` and one gate:
+
+| Row | Module | Role |
+|---|---|---|
+| `workspace-editor` | `lib/index.js` | Euro-Office host, routes, right-sidebar tab type |
+| `workspace-docx-engine` | `lib/engine/index.js` | deterministic document engine seam (`ctx.docxEngine`) |
+| `workspace-docx-model` | `lib/model/index.js` | document sessions, lease, forks, commit |
+| `workspace-docx-tools` | `lib/tools/index.js` | agent `doc_*` tools and runtime context |
+| `workspace-docx-fanout` | `lib/fanout/index.js` | parallel editing over sub-agents |
+| `workspace-legal-review` | `lib/review/index.js` | legal analyzers and review skill |
+
+The engine, model, tools, fan-out and review rows are placeholders in this
+version; they load so the patch and package exports are stable.
 
 ## Deviations and known gaps
 
@@ -74,9 +101,12 @@ unsaved work.
   the Stage 5 harness covers the converter, not the editor's save flow.
 - Requirements for the browser session (authentication on these routes) follow
   the Host's normal route authentication; this was not separately proven.
-- The release frontend is preferred when `resources/euro-office-de/editors`
-  exists; without it the Lite build is served, which compiles LESS at runtime
-  and is roughly 2 s slower per open.
+- The vendored Lite frontend compiles LESS at runtime, so the first open is
+  slower than the release build. Set `WORKSPACE_EDITOR_FRONTEND` to the
+  release editors path for a version-matched performance run.
+- The deterministic engine, `doc_*` tools, fan-out and review rows are
+  placeholders in this version; `document_edit` remains the only agent edit
+  path here.
 - After a restart the tab restores the last document path (stored in
   localStorage); it does not re-open unsaved work.
 
