@@ -1,0 +1,39 @@
+{
+  "name": "workspace-editor",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Workspace editor plugin: Euro-Office document editor in a right-sidebar tab, x2t open/save/PDF export, and an agent document_edit tool.",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/x2t.js",
+    "lib/docs.js",
+    "lib/docs-edit.js",
+    "lib/editor/host.html",
+    "lib/editor/shim.js",
+    "lib/editor/boot.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "jszip": "3.10.1"
+  }
+}

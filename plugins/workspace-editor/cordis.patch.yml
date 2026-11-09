@@ -1,0 +1,6 @@
+# The workspace-editor bundle patch: one host row. Its client half is discovered
+# through the same package's `dsh.client` declaration, so the single row also
+# registers the right-sidebar tab type.
+- insert:
+    - id: workspace-editor
+      name: workspace-editor

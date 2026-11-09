@@ -1,0 +1,35 @@
+# Upstream DSH checkout (never edited, never committed)
+upstream/
+
+# Downloaded/build resources (Euro-Office, Tesseract, x2t)
+resources/
+
+# Isolated DSH state
+.dsh-home/
+.dsh-desktop/
+.dsh-agents/
+
+# Node/build output
+node_modules/
+dist/
+src-dist/
+out/
+.desktop-build/
+
+# Secrets and downloads
+.env
+.env.*
+*.zip
+*.7z
+*.exe
+
+# Local scratch verification workspace
+scratch/
+
+# Logs and spike output
+*.log
+spike/**/logs/
+spike/**/out/
+spike/**/temp/
+spike/**/fontdata/
+spike/**/electron-user-data/
