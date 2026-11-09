@@ -1,6 +1,20 @@
-# The workspace-editor bundle patch: one host row. Its client half is discovered
-# through the same package's `dsh.client` declaration, so the single row also
-# registers the right-sidebar tab type.
+# The workspace-editor bundle patch: one package, several Cordis rows.
+#
+# The first row is the EuroOffice host and registers the right-sidebar tab type
+# through the package's `dsh.client` declaration. The remaining rows are package
+# subpaths: `name` is resolved through the package `exports` map, so plain Node
+# resolution finds the installed module. Rows load in this order, engine before
+# its consumers.
 - insert:
     - id: workspace-editor
       name: workspace-editor
+    - id: workspace-docx-engine
+      name: workspace-editor/engine
+    - id: workspace-docx-model
+      name: workspace-editor/model
+    - id: workspace-docx-tools
+      name: workspace-editor/tools
+    - id: workspace-docx-fanout
+      name: workspace-editor/fanout
+    - id: workspace-legal-review
+      name: workspace-editor/review

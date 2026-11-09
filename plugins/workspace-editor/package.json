@@ -8,10 +8,20 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
+    "./engine": "./lib/engine/index.js",
+    "./model": "./lib/model/index.js",
+    "./tools": "./lib/tools/index.js",
+    "./fanout": "./lib/fanout/index.js",
+    "./review": "./lib/review/index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
+    "lib/engine/index.js",
+    "lib/model/index.js",
+    "lib/tools/index.js",
+    "lib/fanout/index.js",
+    "lib/review/index.js",
     "lib/x2t.js",
     "lib/docs.js",
     "lib/docs-edit.js",
