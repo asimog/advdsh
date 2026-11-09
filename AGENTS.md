@@ -16,6 +16,11 @@ Treat agent context as a budgeted interface, not a dumping ground.
 
 The owner is a lawyer. Never give licensing, legal or compliance advice. Record license facts as facts only when the task asks for them; do not recommend, warn about, evaluate or speculate about licenses. This rule overrides any earlier instruction that asked for licensing guidance.
 
+## Operating rules
+
+- When an instruction file and the existing code disagree, follow the conventions in the code and list each mismatch in the final reply.
+- Do not delegate multiple tasks to subagents or teams that may conflict with each other.
+
 ## Component workflow
 
 1. Build in `C:\dev\advodsh` against unmodified DSH. A component lives in `plugins/<name>`, uses only documented DSH plugin APIs, and is tested in a real DSH profile under `.dsh-home/profiles/`.
