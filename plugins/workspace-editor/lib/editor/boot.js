@@ -153,11 +153,84 @@
     } catch (e) {}
   }
 
+  /** The editor API lives in one frame; this page reaches it across same-origin frames. */
+  function editorApi() {
+    try {
+      var ew = (window.AscDesktopEditor && window.AscDesktopEditor._editorWindow) || findEditorWindow(window)
+      if (ew && ew.Asc && ew.Asc.editor && typeof ew.Asc.editor.asc_GetSelectedText === 'function') {
+        return { win: ew, api: ew.Asc.editor }
+      }
+    } catch (e) {}
+    return null
+  }
+
+  /**
+   * Translate a frame-viewport point into the host page's viewport: add each
+   * ancestor frame's border-box origin while walking up to this window.
+   */
+  function toHostPoint(win, x, y) {
+    var point = { x: x, y: y }
+    var cursor = win
+    for (var depth = 0; depth < 16; depth += 1) {
+      if (!cursor || cursor === window) break
+      var frame = null
+      try { frame = cursor.frameElement } catch (e) { break }
+      if (!frame) break
+      var rect = frame.getBoundingClientRect()
+      point.x += rect.left
+      point.y += rect.top
+      cursor = cursor.parent
+    }
+    return point
+  }
+
+  /**
+   * Relay a non-empty selection to the host page. Empty selections keep
+   * EuroOffice's native menu.
+   */
+  function onContextMenu(win, event) {
+    var found = editorApi()
+    if (!found) return
+    var text = ''
+    try { text = found.api.asc_GetSelectedText(false) } catch (e) { return }
+    if (typeof text !== 'string' || text.trim() === '') return
+    event.preventDefault()
+    var dirty = false
+    try {
+      dirty = !!(window.AscDesktopEditor && window.AscDesktopEditor._isModified)
+      if (!dirty && typeof found.api.isDocumentModified === 'function') {
+        dirty = found.api.isDocumentModified() === true
+      }
+    } catch (e) {}
+    var point = toHostPoint(win, event.clientX, event.clientY)
+    try {
+      window.parent.postMessage({
+        type: 'workspace-editor/selection',
+        x: point.x,
+        y: point.y,
+        text: text,
+        dirty: dirty,
+      }, window.location.origin)
+    } catch (e) {}
+  }
+
+  /** One listener per frame document; `injectInto` revisits the same frames. */
+  function installSelectionListener(win) {
+    var doc = null
+    try { doc = win.document } catch (e) { return }
+    if (!doc || doc.__wsSelectionBound) return
+    doc.__wsSelectionBound = true
+    doc.addEventListener('contextmenu', function (event) {
+      onContextMenu(win, event)
+    }, true)
+  }
+
   function injectInto(win) {
     try {
       if (win && !win.AscDesktopEditor) win.AscDesktopEditor = window.AscDesktopEditor
       if (win && !win.RendererProcessVariable) win.RendererProcessVariable = window.RendererProcessVariable
       patchProtocol(win)
+      if (win && win.document) installSelectionListener(win)
     } catch (e) {}
     var frames = []
     try { frames = win.frames } catch (e) { return }

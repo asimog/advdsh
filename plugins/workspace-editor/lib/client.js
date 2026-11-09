@@ -28,6 +28,15 @@ window.__ModuleLoader__.load({
       opening: 'Opening document...',
       failed: 'Cannot open document',
       'waiting': 'Open a .docx or .pdf preview and choose Edit.',
+      'menu.sendToChat': 'Send to chat',
+      'menu.askAgent': 'Ask agent',
+      'menu.copy': 'Copy',
+      'menu.failed': 'The menu action could not be completed.',
+      'stage.source': 'From `{path}` at revision {revision}.',
+      'stage.dirty': '(editor has unsaved changes)',
+      'stage.unavailable': 'This chat is not available right now.',
+      'stage.failed': 'The composer is busy; the selection was not staged.',
+      'copy.failed': 'Could not copy the selection.',
     }
     const hi = {
       'tab.title': 'संपादक',
@@ -40,6 +49,15 @@ window.__ModuleLoader__.load({
       opening: 'दस्तावेज़ खुल रहा है...',
       failed: 'दस्तावेज़ नहीं खुल सका',
       'waiting': '.docx या .pdf पूर्वावलोकन खोलें और संपादित करें चुनें।',
+      'menu.sendToChat': 'चैट में भेजें',
+      'menu.askAgent': 'एजेंट से पूछें',
+      'menu.copy': 'कॉपी करें',
+      'menu.failed': 'मेनू कार्रवाई पूरी नहीं हो सकी।',
+      'stage.source': '`{path}` से संशोधन {revision} पर।',
+      'stage.dirty': '(संपादक में सहेजे न गए बदलाव हैं)',
+      'stage.unavailable': 'यह चैट अभी उपलब्ध नहीं है।',
+      'stage.failed': 'कंपोज़र व्यस्त है; चयन जमा नहीं किया गया।',
+      'copy.failed': 'चयन कॉपी नहीं हो सका।',
     }
 
     /** Last document requested through the Edit action; page params are the fallback. */
@@ -82,6 +100,7 @@ window.__ModuleLoader__.load({
     /** Editor tab body: toolbar, status, and the host page in an iframe. */
     function EditorBody(props) {
       const t = typeof props.t === 'function' ? props.t : (key) => key
+      const openSelectionMenu = typeof props.openSelectionMenu === 'function' ? props.openSelectionMenu : undefined
       const info = typeof props.useTabInfo === 'function' ? props.useTabInfo() : undefined
       const params = info?.tab?.navigation?.params
       const wanted = (params && typeof params.path === 'string' && params.path !== '' ? params.path : '') || lastPath || readLastPath()
@@ -92,6 +111,7 @@ window.__ModuleLoader__.load({
       const [reloadToken, setReloadToken] = react.useState(0)
       const [loadedMtime, setLoadedMtime] = react.useState(0)
       const docRef = react.useRef(undefined)
+      const frameRef = react.useRef(null)
 
       react.useEffect(() => {
         if (wanted === '') return
@@ -111,7 +131,7 @@ window.__ModuleLoader__.load({
             rememberPath(wanted)
             const state = await readJson(await fetch(`${ROUTE}/api/info?id=${encodeURIComponent(opened.id)}`))
             if (!live) return
-            setDoc(opened)
+            setDoc({ ...opened, path: typeof state.path === 'string' && state.path !== '' ? state.path : wanted })
             setLoadedMtime(state.mtimeMs ?? 0)
             setReloadToken((value) => value + 1)
           })
@@ -119,6 +139,32 @@ window.__ModuleLoader__.load({
           .finally(() => { if (live) setBusy(false) })
         return () => { live = false }
       }, [wanted])
+
+      // Right-click in the editor iframe: verify the sender, map the point to
+      // this window, and open the shared DSH menu for the selection.
+      react.useEffect(() => {
+        if (doc === undefined || openSelectionMenu === undefined) return undefined
+        const onMessage = (event) => {
+          const frame = frameRef.current
+          if (frame === null || event.source !== frame.contentWindow) return
+          if (event.origin !== window.location.origin) return
+          const data = event.data
+          if (data === null || typeof data !== 'object') return
+          if (data.type !== 'workspace-editor/selection') return
+          if (typeof data.text !== 'string' || data.text.trim() === '') return
+          if (typeof data.x !== 'number' || typeof data.y !== 'number') return
+          if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) return
+          const rect = frame.getBoundingClientRect()
+          openSelectionMenu({
+            path: typeof doc.path === 'string' && doc.path !== '' ? doc.path : wanted,
+            revision: loadedMtime,
+            text: data.text,
+            dirty: data.dirty === true,
+          }, { x: rect.left + data.x, y: rect.top + data.y })
+        }
+        window.addEventListener('message', onMessage)
+        return () => { window.removeEventListener('message', onMessage) }
+      }, [doc, wanted, loadedMtime, openSelectionMenu])
 
       // Pick up agent edits: reload only while the editor holds no unsaved work.
       react.useEffect(() => {
@@ -164,6 +210,7 @@ window.__ModuleLoader__.load({
       } else {
         body = react.createElement('iframe', {
           key: `${doc.id}:${reloadToken}`,
+          ref: frameRef,
           src: `${ROUTE}/host.html?doc=${encodeURIComponent(doc.id)}&rev=${reloadToken}`,
           style: styles.frame,
           title: doc.name,
@@ -190,7 +237,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    exports.inject = ['sidebarRightTabs', 'slots', 'locale', 'sidebarRight']
+    exports.inject = ['sidebarRightTabs', 'slots', 'locale', 'sidebarRight', 'sessions', 'contextMenus']
 
     function apply(ctx) {
       const t = ctx.locale.bind(NAMESPACE)
@@ -203,7 +250,88 @@ window.__ModuleLoader__.load({
         }
       }
       const EditAction = makeEditAction(openEditor)
+
+      const quoteLimit = 8000
+      const truncate = (text) => text.length <= quoteLimit ? text : `${text.slice(0, quoteLimit)}…`
+      const quoteFor = (value) => {
+        const body = truncate(value.text).split('\n').map((line) => `> ${line}`).join('\n')
+        const source = t('stage.source', { path: value.path, revision: String(value.revision) })
+        return `${body}\n\n${source}${value.dirty ? ` ${t('stage.dirty')}` : ''}\n`
+      }
+      /** Stage one selection in the tab's own chat through the apply-world input face. */
+      const stage = (value, submit) => {
+        const scope = ctx.sessions.scope(value.sessionId)
+        if (scope === undefined) { ctx.contextMenus.notify(t('stage.unavailable')); return }
+        const conversation = scope.get('conversation')
+        if (conversation === undefined) { ctx.contextMenus.notify(t('stage.unavailable')); return }
+        const input = conversation.input.for(scope)
+        if (!input.insertQuote(quoteFor(value))) { input.notify('error', t('stage.failed')); return }
+        if (submit) input.submit()
+        input.focus()
+      }
+      const copy = (text) => {
+        const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+        if (clipboard === undefined || typeof clipboard.writeText !== 'function') {
+          ctx.contextMenus.notify(t('copy.failed'))
+          return
+        }
+        void clipboard.writeText(text).catch(() => { ctx.contextMenus.notify(t('copy.failed')) })
+      }
+      const openSelectionMenu = (sessionId, selection, point) => {
+        if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return
+        ctx.contextMenus.open({
+          kind: 'eurooffice',
+          value: {
+            sessionId,
+            path: typeof selection.path === 'string' ? selection.path : '',
+            revision: typeof selection.revision === 'number' ? selection.revision : 0,
+            text: typeof selection.text === 'string' ? selection.text : '',
+            dirty: selection.dirty === true,
+          },
+        }, point)
+      }
+
       ctx.effect(() => ctx.locale.register(NAMESPACE, { en, hi }), 'workspace-editor.copy')
+      ctx.effect(() => ctx.contextMenus.register({
+        id: 'workspace-editor.selection',
+        target: 'eurooffice',
+        order: 100,
+        resolve: (target) => {
+          // The registry passes the target value; accept a whole target too.
+          const value = target !== null && typeof target === 'object' && 'value' in target ? target.value : target
+          if (value === null || typeof value !== 'object') return []
+          const sessionId = typeof value.sessionId === 'string' ? value.sessionId : ''
+          const text = typeof value.text === 'string' ? value.text : ''
+          if (sessionId === '' || text.trim() === '') return []
+          const selection = {
+            sessionId,
+            path: typeof value.path === 'string' ? value.path : '',
+            revision: typeof value.revision === 'number' ? value.revision : 0,
+            text,
+            dirty: value.dirty === true,
+          }
+          return [
+            {
+              id: 'workspace-editor.selection.send',
+              label: t('menu.sendToChat'),
+              failureLabel: t('menu.failed'),
+              run: () => { stage(selection, false) },
+            },
+            {
+              id: 'workspace-editor.selection.ask',
+              label: t('menu.askAgent'),
+              failureLabel: t('menu.failed'),
+              run: () => { stage(selection, true) },
+            },
+            {
+              id: 'workspace-editor.selection.copy',
+              label: t('menu.copy'),
+              failureLabel: t('menu.failed'),
+              run: () => { copy(selection.text) },
+            },
+          ]
+        },
+      }), 'workspace-editor.selection-menu')
       ctx.effect(() => ctx.sidebarRightTabs.register({
         id: KIND,
         kind: KIND,
@@ -220,6 +348,9 @@ window.__ModuleLoader__.load({
         name: 'sidebar.right.pane.tab',
         key: KIND,
         locale: NAMESPACE,
+        inject: (sessionId) => ({
+          openSelectionMenu: (selection, point) => { openSelectionMenu(sessionId, selection, point) },
+        }),
       }, EditorBody)), 'workspace-editor.body')
       ctx.effect(() => ctx.slots.inject('sidebar.right.tab.document.actions', () => ctx.slots.register({
         name: 'sidebar.right.tab.document.actions',
