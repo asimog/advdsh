@@ -31,7 +31,7 @@ Non-goals: PDF text editing (open/display/export only), chart/SmartArt/shape/equ
 | Agent tools | Raw `ToolDefinition` through `ctx.tools.register` (the linked plugin cannot resolve `@deepseek-ai/dsh-tools`); canonical `output.schema` + `render`, `exec.signal`, `exec.agent`, optional `timeoutMs`, `presentCall`/`presentResult` | `docs/cookbook/adding-a-tool.md`; `docs/subsystems/tools.md`; `plugins/workspace-editor/lib/index.js` |
 | Runtime context | `ctx.systemPrompt.context({name,order,text})`; numeric order is legal; scope the registration to the agent/session context | `docs/subsystems/system-prompt.md`; `packages/session/working-directory/src/index.ts` |
 | Sub-agents | `ctx.subagents.startActivation({provider,label,request:{prompt,parent,cwd,maxDepth},signal,delivery:'caller'})`; `result`, `dispose()`; depth from `agent.session.header.delegationDepth` | `docs/subsystems/subagent.md`; `packages/subagent/tool-subagent/src/index.ts` |
-| Editor process | `ctx.subprocess.spawn` only if the Document Builder needs a worker process; otherwise the engine runs in-process in the plugin | `docs/subsystems/subprocess.md` |
+| Editor process | `ctx.subprocess.spawn` runs the hidden-Electron Document Builder sidecar; the plugin owns one child process and awaits its exit on dispose | `docs/subsystems/subprocess.md` |
 | SSE / routes | `ctx.webServer.register({kind,path,handler})` owns the response; gzip skips `text/event-stream`; every route calls `ctx.get('connection')?.requestRejection(req)` and verifies same-origin when the service exists; dispose force-closes held sockets | `docs/subsystems/web-server.md`; `packages/host/open-in-app/src/index.ts`; `packages/client/hmr/src/index.ts` |
 | Files | `ctx.fs.resolve/stat/readBytes/watch` for bytes and change observation; writes only through the editor store | `docs/subsystems/filesystem.md` |
 | Session lifecycle | `session/disposed` drops per-session state; `session/event` observes turns/tools; `agent/turn-stopping` flushes | `docs/subsystems/session.md`; `packages/deliverables/workspace-changes/src/index.ts` |
@@ -46,7 +46,7 @@ One package, `workspace-editor`, keeps the component identity, one `engines.dsh`
 | Row | Module | Role | Provides | Consumes |
 |---|---|---|---|---|
 | `workspace-editor` | `lib/index.js` | EuroOffice host, file/revision authority, right-dock tab, selection menu | `ctx.editorDocuments`, store seam, `editor` tool, SSE/POST routes | `webServer`, `tools`, `fs`, `systemPrompt`, optional `connection`, client services |
-| `workspace-docx-engine` | `lib/engine/index.js` | Deterministic document engine (Document Builder or own model) | `ctx.docxEngine` | optional `subprocess`, `fs` |
+| `workspace-docx-engine` | `lib/engine/index.js` | Document Builder sidecar (hidden Electron) | `ctx.docxEngine` | `subprocess`, `fs` |
 | `workspace-docx-model` | `lib/model/index.js` | Sessions, stable IDs, forks, merge, lease, commit | `ctx.docxModel` | `docxEngine`, `editorDocuments`, `fs` |
 | `workspace-docx-tools` | `lib/tools/index.js` | Agent tools + runtime context + lifecycle | `doc_*` tools | `tools`, `docxModel`, `editorDocuments` |
 | `workspace-docx-fanout` | `lib/fanout/index.js` | Parallel editing | `doc_fanout` | `tools`, `docxModel`, `subagents` |
@@ -80,10 +80,10 @@ Per `.agents/docs/eurooffice-hosting-assessment.md`, method B is chosen: vendor 
 
 ## Agent document engine
 
-The engine is chosen by an S0 spike, behind one service interface:
+The engine is the **official sdkjs Word Document Builder** (`resources/euro-office/sdkjs/word/apiBuilder.js`), proven headlessly in `spike/s0/docbuilder`: Electron 44.7.0, hidden window, open a DOCX, replace a paragraph, insert a numbered list item and a table row, save through x2t, verify the markers. It runs as a managed Electron sidecar behind `ctx.docxEngine`.
 
-- **D1 — sdkjs Document Builder (preferred).** `apiBuilder.js` from the vendored sdkjs, run headlessly (Electron/Node with a DOM). The spike must open a DOCX, edit a paragraph, insert a list item and a table row, save, and reopen in EuroOffice and Word without repair. If it passes, the builder is the deterministic engine.
-- **D2 — own reduced model (fallback).** A reduced in-memory representation with byte-preserving block anchors, stable IDs, deterministic ops, word diff and an OOXML tracked-change serializer, using x2t for DOCX↔Editor.bin. This is owned code, not a third-party engine.
+- **D1 — Document Builder (chosen).** The sidecar owns one hidden `BrowserWindow`, loads the vendored Lite editor page and the builder, and speaks request/response JSON over stdio. The plugin sends bytes and ops; the sidecar returns block descriptions, diffs and saved DOCX bytes. No filesystem or network access in the sidecar.
+- **D2 — own reduced model (fallback).** A reduced in-memory representation with byte-preserving block anchors, stable IDs, deterministic ops, word diff and an OOXML tracked-change serializer, using x2t for DOCX↔Editor.bin. Used only if the builder cannot express a required operation (tracked-change serialization is the first candidate).
 
 Either way the model contract is the same:
 
@@ -175,15 +175,15 @@ Merge into the parent by stable block ID: unchanged in a fork takes the other si
 
 | Stage | Deliverable | Gate |
 |---|---|---|
-| S0 | Vendored Lite editor boots in the right dock; frame selection bridge; shared context menu; composer staging; Document Builder headless spike (or fallback decision) | Editor boots from the vendored tree; menu opens at the pointer; staging reaches the composer; builder spike passes or D2 is chosen; no DSH source edit |
-| S1 | Engine behind `ctx.docxEngine`: builder/own model, stable IDs, ops, diff, tracked serializer, fidelity harness | Open/edit/diff/commit round trip; Word and EuroOffice open; IDs stable |
+| S0 | Vendored Lite editor boots in the right dock; frame selection bridge; shared context menu; composer staging; Document Builder headless spike | Editor boots from the vendored tree; menu opens at the pointer; staging reaches the composer; builder spike passed (`spike/s0/docbuilder/REPORT.md`); no DSH source edit |
+| S1 | Engine behind `ctx.docxEngine`: Electron builder sidecar, block descriptions, ops, diff, tracked serializer, fidelity harness | Open/edit/diff/commit round trip; Word and EuroOffice open; IDs stable |
 | S2 | Model + tools: sessions keyed by path+hash, lease, modes, forks/merge, `doc_*` tools | Agent workflow on `TRO - Motion.docx` and a 100-page document; context-mode enforcement; stale/dirty commit errors |
 | S3 | EuroOffice commit/review: `applyBytes`, review mode, accept/reject, SSE, conflicts, `editor` tool | Agent edit → tracked changes visible → accept → save; human edit → conflict |
 | S4 | Fan-out and merge | Two children, one clean merge and one conflict; cancellation/dispose |
 | S5 | Legal review + skill | Planted defects found with stable codes; skill installed and used |
 | S6 | Hardening, packaging, docs, records | Full acceptance run; dispose leaves no SSE, watchers or forks |
 
-S0 is the critical path because the engine choice depends on the builder spike.
+S1 is the critical path: S0 proved the builder runs headlessly, so the remaining risk is the sidecar contract, the op surface and tracked-change serialization.
 
 ## Testing and evidence
 

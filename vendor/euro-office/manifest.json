@@ -1,0 +1,49 @@
+{
+  "name": "euro-office-lite-frontend",
+  "source": {
+    "repoUrl": "https://github.com/delmarguillen/euro-office-lite",
+    "commit": "8f397256a1c3781d25723d286c42107ccfe586ab",
+    "describe": "v0.17.46-alpha-82-g8f39725",
+    "submodules": {
+      "src/sdkjs": {
+        "url": "https://github.com/Euro-Office/sdkjs.git",
+        "commit": "ab0a5cf561f54291d03cb867707edd50ec7c71a5"
+      },
+      "src/web-apps": {
+        "url": "https://github.com/Euro-Office/web-apps.git",
+        "commit": "53dd1a19a7a9a7dc670545e6a04443b7b8a31ea1"
+      }
+    }
+  },
+  "build": {
+    "scripts": [
+      "scripts/setup.ps1",
+      "scripts/prepare-dist.ps1"
+    ],
+    "outputDir": "src-dist"
+  },
+  "output": {
+    "path": "resources/euro-office",
+    "presenceCheck": {
+      "path": "index.html",
+      "sha256": "427a6eb90acfd7d14b0f9e4073632cf1799f3e3b556275cd96a3bd8b32e4b304",
+      "bytes": 11819
+    },
+    "generatedFile": {
+      "path": "sdkjs/develop/sdkjs/word/scripts.js",
+      "contains": "sdk_scripts"
+    },
+    "requiredEntries": [
+      "index.html",
+      "bridge.js",
+      "button-hint-patch.js",
+      "editor-patches.js",
+      "font-patches.js",
+      "fonts",
+      "sdkjs",
+      "web-apps"
+    ],
+    "expectedFiles": 5907,
+    "expectedBytes": 227375696
+  }
+}

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Euro-Office Document Builder spike</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #fff; }
+    #placeholder { position: absolute; inset: 0; }
+    #status { position: fixed; left: 8px; bottom: 6px; z-index: 20; font: 12px/1.4 Consolas, monospace; color: #666; }
+  </style>
+  <script src="/spike-bridge.js"></script>
+  <script src="/web-apps/apps/api/documents/api.js"></script>
+</head>
+<body>
+  <div id="placeholder"></div>
+  <div id="status">booting</div>
+</body>
+</html>

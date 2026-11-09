@@ -1,0 +1,11 @@
+{
+  "name": "docbuilder-spike",
+  "version": "0.1.0",
+  "private": true,
+  "description": "S0 spike: run the official sdkjs Word Document Builder headlessly and edit a DOCX",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron ."
+  }
+}

@@ -31,6 +31,7 @@ The owner is a lawyer. Never give licensing, legal or compliance advice. Record 
 - **Records go to `.agents/`.** Logs, prompts, docs and assessments. No plugin code there.
 - **No secrets.** Environment keys only; no copied `.credentials.yaml`, `.env` or installed home.
 - **Only official EuroOffice or EuroOfficeLite** may be vendored for the editor. GenOffice, WordCraft and PDFCraft are not used.
+- **Automation never shows modal dialogs.** Spikes, headless runs and Electron automation write errors to a log file and exit non-zero; they never block on a dialog.
 
 ## Start a session
 
