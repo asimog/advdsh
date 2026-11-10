@@ -91,7 +91,7 @@ the official sdkjs Word Document Builder from the vendored Lite tree
 - **Env overrides.** `WORKSPACE_EDITOR_ENGINE_ELECTRON`,
   `WORKSPACE_EDITOR_ENGINE_EO_ROOT`, `WORKSPACE_EDITOR_ENGINE_X2T` (or
   `WORKSPACE_EDITOR_X2T`), `WORKSPACE_EDITOR_ENGINE_TEMP`,
-  `WORKSPACE_EDITOR_ENGINE_LOGS`, and the `...._STARTUP_TIMEOUT_MS` /
+  `WORKSPACE_EDITOR_ENGINE_LOGS`, and the `..._STARTUP_TIMEOUT_MS` /
   `..._TIMEOUT_MS` / `..._OPEN_TIMEOUT_MS` / `..._SAVE_TIMEOUT_MS` /
   `..._SHUTDOWN_TIMEOUT_MS` overrides. Without a binary the row still loads and
   every call rejects with `ENGINE_UNAVAILABLE` plus the tried paths.
