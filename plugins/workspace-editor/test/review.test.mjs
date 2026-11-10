@@ -147,6 +147,7 @@ test('the review row registers analyzers, the doc_analyze tool and the skill', a
   assert.equal(fake.analyzers.length, 10)
   assert.equal(fake.skills.length, 1)
   assert.equal(fake.skills[0].name, 'legal-document-review')
+  assert.equal(fake.skills[0].source, 'runtime')
   assert.match(fake.skills[0].content, /doc_analyze/)
   const tool = fake.tools.get('doc_analyze')
   assert.ok(tool, 'doc_analyze is registered')

@@ -1,5 +1,8 @@
 # workspace-editor
 
+Version 0.3.0. The bundle provides the document model, agent tools, fan-out and
+legal review beside the Euro-Office editor; see the row sections below.
+
 Stage 6: the Euro-Office document editor as a right-sidebar tab in the DSH
 window, with an agent tool that edits the same file and a right-click selection
 gesture that stages document text into the chat composer.

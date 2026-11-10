@@ -48,6 +48,21 @@
     return frame
   }
 
+  /**
+   * The font shaper (harfbuzz wasm) loads after the editor app; opening a
+   * document before it lands throws AscFonts.HB_StartString is not a function.
+   * @returns {boolean} true when the editor frame can shape text.
+   */
+  function fontsReady() {
+    const frame = findEditorFrame() || desktopApi._editorWindow
+    if (!frame) return false
+    try {
+      return !!(frame.AscFonts && typeof frame.AscFonts.HB_StartString === 'function')
+    } catch (error) {
+      return false
+    }
+  }
+
   function toBytes(data) {
     if (!data) return new Uint8Array(0)
     if (typeof data === 'string') {
@@ -584,6 +599,7 @@
     applyOp,
     saveBinBase64,
     findEditorFrame,
+    fontsReady,
   }
 
   async function boot() {

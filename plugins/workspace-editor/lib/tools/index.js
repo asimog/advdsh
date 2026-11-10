@@ -111,7 +111,20 @@ export function apply(ctx) {
     },
     async execute(args, exec) {
       const opened = await model.open(args.path, { author: authorOf(exec) })
-      return opened
+      return {
+        handle: opened.handle,
+        path: opened.path,
+        name: opened.name,
+        contentHash: opened.contentHash,
+        revision: opened.revision,
+        baseRevision: opened.baseRevision,
+        readMode: opened.readMode,
+        blocks: opened.blocks,
+        paragraphs: opened.paragraphs,
+        tables: opened.tables,
+        tokens: opened.tokens,
+        outline: opened.outline,
+      }
     },
   })
 
@@ -336,8 +349,8 @@ export function apply(ctx) {
                 id: { type: 'string' },
                 index: { type: 'number' },
                 kind: { type: 'string' },
-                before: { type: 'string' },
-                after: { type: 'string' },
+                before: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                after: { oneOf: [{ type: 'string' }, { type: 'null' }] },
               },
               required: ['type', 'id', 'index', 'kind'],
               additionalProperties: true,
@@ -560,8 +573,8 @@ export function apply(ctx) {
                   id: { type: 'string' },
                   index: { type: 'number' },
                   kind: { type: 'string' },
-                  textBefore: { type: 'string' },
-                  textAfter: { type: 'string' },
+                  textBefore: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  textAfter: { oneOf: [{ type: 'string' }, { type: 'null' }] },
                 },
                 required: ['id', 'index', 'kind'],
                 additionalProperties: true,

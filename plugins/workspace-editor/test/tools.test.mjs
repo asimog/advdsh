@@ -12,11 +12,33 @@ import { PATH, createFakeDocuments, createModel } from './fixtures.mjs'
 /** @param {unknown} value - canonical tool value. @param {object} schema - output.schema. @param {string} at - path for messages. */
 function assertSchema(value, schema, at = 'value') {
   if (schema === undefined) return
+  if (Array.isArray(schema.oneOf)) {
+    const failures = []
+    for (const branch of schema.oneOf) {
+      try {
+        assertSchema(value, branch, at)
+        return
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    assert.fail(`${at} matches no oneOf branch`)
+  }
+  if (schema.type === 'null') {
+    assert.equal(value, null, `${at} must be null`)
+    return
+  }
   if (schema.type === 'object') {
     assert.equal(typeof value, 'object', `${at} must be an object`)
     assert.notEqual(value, null, `${at} must not be null`)
     for (const key of schema.required ?? []) assert.ok(Object.hasOwn(value, key), `${at}.${key} is required`)
-    for (const [key, property] of Object.entries(schema.properties ?? {})) {
+    const declared = schema.properties ?? {}
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(value)) {
+        assert.ok(Object.hasOwn(declared, key), `${at}.${key} is not a declared property`)
+      }
+    }
+    for (const [key, property] of Object.entries(declared)) {
       if (!Object.hasOwn(value, key)) continue
       assertSchema(value[key], property, `${at}.${key}`)
     }
@@ -153,8 +175,22 @@ test('doc_edit, doc_diff, doc_check and doc_commit form the edit flow', async ()
   assert.equal(booted.documents.state.applied[0].options.baseRevision, 'r-1')
 })
 
-test('doc_edit maps a stale target and an unsupported op to stable codes', async () => {
+test('insert ops report a null before text inside the strict output schema', async () => {
   const booted = boot()
+  const opened = await run(booted.tools.get('doc_open'), { path: PATH })
+  const inserted = await run(booted.tools.get('doc_edit'), {
+    doc: opened.handle,
+    type: 'insert_paragraph',
+    index: 4,
+    text: 'Inserted line.',
+  })
+  assert.equal(inserted.affected[0].textBefore, null)
+  assert.equal(inserted.affected[0].textAfter, 'Inserted line.')
+  const diff = await run(booted.tools.get('doc_diff'), { doc: opened.handle })
+  assert.equal(diff.changed, true)
+})
+
+test('doc_edit maps a stale target and an unsupported op to stable codes', async () => {  const booted = boot()
   const opened = await run(booted.tools.get('doc_open'), { path: PATH })
   await assert.rejects(
     () => booted.tools.get('doc_edit').execute({ doc: opened.handle, type: 'replace_paragraph', blockId: 'p:missing', text: 'x' }),

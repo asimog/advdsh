@@ -424,6 +424,9 @@ async function openSession(params, signal) {
   try {
     await createSessionWindow(session)
     await waitFor(session, "window.__dbx && window.__dbx.state === 'editor-app-ready'", 120000, 'editor-app-ready', signal)
+    // The font shaper loads asynchronously after the app; opening before it is
+    // ready fails with `AscFonts.HB_StartString is not a function`.
+    await waitFor(session, 'window.__dbx.fontsReady()', 60000, 'fonts-ready', signal)
     await exec(session, 'window.__dbx.openConfigured()')
     await waitFor(session, "window.__dbx.state === 'document-ready'", 180000, 'document-ready', signal)
   } catch (error) {

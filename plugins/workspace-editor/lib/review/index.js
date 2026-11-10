@@ -114,6 +114,7 @@ export function apply(ctx) {
       name: 'legal-document-review',
       description: 'Analyze and edit a legal Word document (.docx) safely: read modes, stable finding codes, one tracked edit per call, lease-checked commit.',
       content: PLAYBOOK,
+      source: 'runtime',
       invocation: { modelInvocable: true, userInvocable: true },
       provider: 'workspace-legal-review',
       metadata: { codes: LEGAL_ANALYZER_CODES },
