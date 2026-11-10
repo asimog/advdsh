@@ -2,6 +2,12 @@
 
 This is a testbed for DeepSeek Harness (DSH) plugins. Plugin source goes in `plugins/`, generated assets in `resources/`, spikes in `spike/`, records in `.agents/`, durable docs in `docs/`; start from `docs/repo-map.md`. Keep this file short: standing orders only, added after a rule is broken twice; detail lives in `docs/`.
 
+## Build glossary
+
+- **devharness** — this Desktop DeepSeek Electron harness: where the user codes and where the agent operates.
+- **localbuild** — the Electron app used for desktop testing, with the editor plugins loaded.
+- **testweb** — the testing web-based version of localbuild.
+
 ## Working with the user
 
 - Before you start, say in a line what you're about to do; brief updates while you work help the user follow along. Close with a short recap that stands on its own (what you found, what you did, and what's next), so a reader who only sees the last message has the full picture.
