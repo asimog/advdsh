@@ -82,7 +82,7 @@ Per `.agents/docs/eurooffice-hosting-assessment.md`, method B is chosen: vendor 
 
 The engine is the **official sdkjs Word Document Builder** (`resources/euro-office/sdkjs/word/apiBuilder.js`), proven headlessly in `spike/s0/docbuilder`: Electron 44.7.0, hidden window, open a DOCX, replace a paragraph, insert a numbered list item and a table row, save through x2t, verify the markers. It runs as a managed Electron sidecar behind `ctx.docxEngine`.
 
-- **D1 — Document Builder (chosen).** The sidecar owns one hidden `BrowserWindow`, loads the vendored Lite editor page and the builder, and speaks request/response JSON over stdio. The plugin sends bytes and ops; the sidecar returns block descriptions, diffs and saved DOCX bytes. No filesystem or network access in the sidecar.
+- **D1 — Document Builder (chosen).** The sidecar owns one hidden `BrowserWindow` per session, loads the vendored Lite editor page and the builder, and answers JSON requests on a loopback HTTP RPC endpoint announced in one `ready` frame on stdout (Electron child stdin is unreliable on Windows). It writes only inside its per-run temp root (`Editor.bin`, x2t staging) and opens no outbound sockets. The plugin sends bytes and ops; the sidecar returns block descriptions, diffs and saved DOCX bytes. Requests carry per-request timeout/cancel; a crash is logged and restarted.
 - **D2 — own reduced model (fallback).** A reduced in-memory representation with byte-preserving block anchors, stable IDs, deterministic ops, word diff and an OOXML tracked-change serializer, using x2t for DOCX↔Editor.bin. Used only if the builder cannot express a required operation (tracked-change serialization is the first candidate).
 
 Either way the model contract is the same:
@@ -225,4 +225,4 @@ S1 is the critical path: S0 proved the builder runs headlessly, so the remaining
 
 - `.agents/docs/eurooffice-hosting-assessment.md` — why EuroOfficeLite is vendored and how the engine choice is gated.
 - Per-row README sections in `plugins/workspace-editor/README.md` — routes, services, events, tools, env vars, limits.
-- `.agents/logs/2026-11-10-legal-docx-workspace.md` and `.agents/prompts/2026-11-10-successor-legal-docx-workspace.md` — session record and successor brief.
+- `.agents/logs/2026-11-10-legal-docx-workspace-engine.md` and `.agents/prompts/2026-11-10-successor-legal-docx-workspace-engine.md` — engine session record and successor brief.

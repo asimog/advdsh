@@ -509,6 +509,7 @@ export class DocxEngineSidecar {
   status() {
     return {
       running: this.process !== null,
+      ready: this.rpc !== null,
       pid: this.process?.pid ?? null,
       broken: this.broken,
       restarts: this.restartCount,

@@ -85,6 +85,9 @@ export function resolveEngineConfig(overrides = {}) {
   const localAppData = env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
 
   const electron = first([
+    // Inside the DSH desktop host, process.execPath is the host's own
+    // electron.exe: reuse it instead of a dev-spike copy.
+    { value: process.versions.electron ? process.execPath : undefined, isValid: electronFrom },
     { value: overrides.electron, isValid: electronFrom },
     { value: env.WORKSPACE_EDITOR_ENGINE_ELECTRON, isValid: electronFrom },
     // The DSH Desktop host is Electron: its own executable is the sidecar runtime.
@@ -144,7 +147,7 @@ export function resolveEngineConfig(overrides = {}) {
       saveMs: positiveInt(env.WORKSPACE_EDITOR_ENGINE_SAVE_TIMEOUT_MS, 180_000),
       shutdownMs: positiveInt(env.WORKSPACE_EDITOR_ENGINE_SHUTDOWN_TIMEOUT_MS, 20_000),
     },
-    testHooks: env.WORKSPACE_EDITOR_ENGINE_TEST_HOOKS === '1',
+    testHooks: overrides.testHooks ?? env.WORKSPACE_EDITOR_ENGINE_TEST_HOOKS === '1',
   }
 }
 

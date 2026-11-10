@@ -22,7 +22,7 @@ import { createNodeRuntime } from './manager.js'
 import { resolveEngineConfig } from './locate.js'
 
 const engineDir = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(engineDir, '..', '..', '..', '..', '..')
+const repoRoot = path.resolve(engineDir, '..', '..', '..', '..')
 
 function arg(name, fallback) {
   const prefix = `--${name}=`
@@ -135,6 +135,8 @@ async function main() {
 
   const runtime = createNodeRuntime()
   const engine = createDocxEngine(config, { runtime })
+  /** The test-hook engine is separate so the main one can be disposed first. */
+  let hooked = null
   facts.author = AUTHOR
 
   try {
@@ -224,30 +226,46 @@ async function main() {
 
     // --- crash log/restart, timeout/cancel (test hooks) ----------------------
     if (WITH_HOOKS) {
-      const hooked = createDocxEngine(resolveEngineConfig({
+      hooked = createDocxEngine(resolveEngineConfig({
         logDir: path.join(OUT_DIR, 'logs'),
         tempRoot: path.join(OUT_DIR, 'temp'),
         testHooks: true,
-        // resolveEngineConfig reads the env flag; the manager accepts an explicit override.
       }), { runtime })
-      hooked.config.testHooks = true
+      // Start first: `pid` is null until the sidecar is spawned, so the crash
+      // driver must remember the pid of a sidecar that actually ran.
+      await hooked.start()
+      const deadPid = hooked.status().pid
       const crash = await hooked.debugExit().then(() => null, (error) => error)
       check('crash_reported', crash && crash.code === 'ENGINE_CRASHED', crash && crash.code)
+      // `running` turns true when the replacement process is spawned; `ready`
+      // only when its RPC listener answers. Wait for a NEW pid that is ready, so
+      // timeout/cancel talk to a usable sidecar instead of the dead port.
       const deadline = Date.now() + 60_000
-      while (Date.now() < deadline && hooked.status().running === false) await new Promise((resolve) => setTimeout(resolve, 250))
-      check('crash_restart', hooked.status().running === true, hooked.status())
+      while (Date.now() < deadline) {
+        const status = hooked.status()
+        if (status.ready === true && status.pid !== null && status.pid !== deadPid) break
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      const restarted = hooked.status()
+      check('crash_restart', restarted.ready === true && restarted.pid !== null && restarted.pid !== deadPid, restarted)
       const crashLog = path.join(OUT_DIR, 'logs', 'crash.log')
       const crashText = existsSync(crashLog) ? await readFile(crashLog, 'utf8') : ''
       check('crash_log_written', crashText.includes('sidecar-exit') && crashText.includes('debug.exit'))
       const timeout = await hooked.request('debug.sleep', { ms: 5000 }, { timeoutMs: 400, methodLabel: 'debug.sleep' }).then(() => null, (error) => error)
       check('request_timeout', timeout && timeout.code === 'ENGINE_TIMEOUT', timeout && timeout.code)
-      const afterTimeout = await hooked.debugSleep(1)
-      check('sidecar_survives_cancel', afterTimeout && afterTimeout.sleptMs === 1)
+      try {
+        const afterTimeout = await hooked.debugSleep(1)
+        check('sidecar_survives_cancel', afterTimeout && afterTimeout.sleptMs === 1)
+      } catch (error) {
+        check('sidecar_survives_cancel', false, String(error && error.message || error))
+      }
       await hooked.dispose()
       check('test_sidecar_disposed', hooked.status().running === false)
+      hooked = null
     }
   } finally {
     await engine.dispose().catch(() => {})
+    if (hooked !== null) await hooked.dispose().catch(() => {})
   }
 
   const ok = Object.values(checks).every(Boolean)

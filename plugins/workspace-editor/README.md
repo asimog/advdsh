@@ -61,6 +61,48 @@ append a paragraph, or replace a paragraph by index. The open editor tab polls
 the file mtime and reloads when the agent changed it and the editor holds no
 unsaved work.
 
+## Engine half (`lib/engine/`, row `workspace-docx-engine`)
+
+The engine row provides **`ctx.docxEngine`**: a hidden-Electron sidecar that runs
+the official sdkjs Word Document Builder from the vendored Lite tree
+(`resources/euro-office/sdkjs/word/apiBuilder.js`) and converts through x2t.
+
+- **Process.** One hidden Electron child, spawned through `ctx.subprocess` (the
+  verification harness passes Node's `child_process` instead). It loads the
+  vendored editor page, opens a DOCX as `Editor.bin`, and owns one hidden
+  `BrowserWindow` per session. Each run gets its own temp root and log files.
+- **Wire.** stdout carries one `ready` frame (protocol 1, loopback RPC port and
+  token) and sidecar events; every request is a JSON POST to
+  `http://127.0.0.1:<port>/engine-rpc` with an `x-engine-token` header. Electron
+  child stdin is not used because it is unreliable on Windows.
+- **Requests.** Per-request id, timeout and `AbortSignal`; a timed-out or
+  cancelled request aborts inside the sidecar. A crashed sidecar writes
+  `crash.log`, marks its sessions lost and restarts (limit 10). `dispose()`
+  sends shutdown, then terminates and awaits the exit. `status().ready` is true
+  only when the RPC listener accepts requests; `running` is the process range.
+- **Service surface.** `open`, `describe`, `apply`, `diff`, `save`, `close`, and
+  a read-only `status()`. Blocks carry a stable id (`w14:paraId` when present,
+  else `p:<serial>`), an engine index, kind, text and style/numbering facts.
+  Edits carry the expected text and fail with `ENGINE_STALE_TARGET` on drift.
+  `save` returns DOCX bytes/hash and writes the destination atomically.
+- **Tracked changes.** The sidecar enables `ApiDocument.SetTrackRevisions(true)`
+  and edits as author `agent:<session>`, so the saved DOCX carries `w:ins`/
+  `w:del` attributed to the agent. The human editor's user is never swapped.
+- **Env overrides.** `WORKSPACE_EDITOR_ENGINE_ELECTRON`,
+  `WORKSPACE_EDITOR_ENGINE_EO_ROOT`, `WORKSPACE_EDITOR_ENGINE_X2T` (or
+  `WORKSPACE_EDITOR_X2T`), `WORKSPACE_EDITOR_ENGINE_TEMP`,
+  `WORKSPACE_EDITOR_ENGINE_LOGS`, and the `...._STARTUP_TIMEOUT_MS` /
+  `..._TIMEOUT_MS` / `..._OPEN_TIMEOUT_MS` / `..._SAVE_TIMEOUT_MS` /
+  `..._SHUTDOWN_TIMEOUT_MS` overrides. Without a binary the row still loads and
+  every call rejects with `ENGINE_UNAVAILABLE` plus the tried paths.
+  `WORKSPACE_EDITOR_ENGINE_TEST_HOOKS=1` enables the crash/timeout hooks.
+- **Verification.** `node plugins/workspace-editor/lib/engine/verify.mjs
+  --with-hooks` opens the fixture, applies a tracked replace plus a list item and
+  a table row, saves through x2t, asserts the OOXML markers and the agent author,
+  reopens the saved DOCX, then exercises cancelled open, stale target, timeout,
+  crash/restart, sidecar-survives-cancel and awaited exit. It writes
+  `lib/engine/out/verification.json` and exits non-zero on a failed check.
+
 ## Client half (`lib/client.js`)
 
 - Tab type `workspace-editor` with `keepMounted: true`, body registered in
@@ -88,8 +130,9 @@ One package inserts several Cordis rows, one `engines.dsh` and one gate:
 | `workspace-docx-fanout` | `lib/fanout/index.js` | parallel editing over sub-agents |
 | `workspace-legal-review` | `lib/review/index.js` | legal analyzers and review skill |
 
-The engine, model, tools, fan-out and review rows are placeholders in this
-version; they load so the patch and package exports are stable.
+The engine row is implemented; the model, tools, fan-out and review rows are
+placeholders in this version. They load so the patch and package exports are
+stable.
 
 ## Deviations and known gaps
 
@@ -104,9 +147,12 @@ version; they load so the patch and package exports are stable.
 - The vendored Lite frontend compiles LESS at runtime, so the first open is
   slower than the release build. Set `WORKSPACE_EDITOR_FRONTEND` to the
   release editors path for a version-matched performance run.
-- The deterministic engine, `doc_*` tools, fan-out and review rows are
-  placeholders in this version; `document_edit` remains the only agent edit
-  path here.
+- The engine row provides `ctx.docxEngine`, but the `doc_*` agent tools, the
+  document model, fan-out and legal review are still placeholders;
+  `document_edit` remains the only agent edit path.
+- The engine sidecar's DOCX round trip is verified on the fixture, including
+  tracked `w:ins`/`w:del` with the agent author. A Word-open sweep and a
+  duplicate-`w:id`/`paraId` fidelity sweep are not part of the harness yet.
 - After a restart the tab restores the last document path (stored in
   localStorage); it does not re-open unsaved work.
 
@@ -115,3 +161,12 @@ version; they load so the patch and package exports are stable.
 Stage 5 must have run `scripts/stage5/setup-x2t.ps1` first (converter, editors,
 font cache). Then reload the dev Desktop; the plugin is already linked into the
 isolated profile.
+
+Check the engine without the app:
+
+```powershell
+node plugins/workspace-editor/lib/engine/verify.mjs --with-hooks
+```
+
+It needs the vendored frontend, x2t and an Electron binary (it falls back to
+`process.execPath` inside Electron, otherwise `spike/editor-host`'s Electron).
