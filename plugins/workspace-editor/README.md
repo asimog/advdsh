@@ -270,6 +270,15 @@ legal review, under one bundle patch, one ngines.dsh range and one gate.
 - `document_edit` remains the simple whole-file agent path beside the `doc_*` tools.
 - Legal analyzers are structural and textual only: fields, comments, bookmarks and
   tracked-change metadata are not inspected yet.
+- `replace_paragraph` is reliable on a paragraph without revision marks. On a
+  paragraph that already carries tracked revisions the builder range can split
+  and the call can append the new text instead of replacing; use
+  `insert_paragraph` plus `delete_paragraph`, or accept/reload the document
+  first. The engine verifier covers the clean path only.
+- The fan-out row is implemented and unit-tested; the live acceptance run
+  reported both forks completed and one merged change with no conflicts, but the
+  document used had no target for one task, so a live two-child conflict run is
+  still worth adding to the record.
 - The engine sidecar's DOCX round trip is verified on the fixture, including
   tracked `w:ins`/`w:del` with the agent author, `w14:paraId` stability across
   a save/reopen, a Word-open sweep with the tracked revisions intact, and unique
