@@ -228,7 +228,7 @@ export function createDocxModel(options) {
   const engine = options.engine
   const documents = options.documents ?? undefined
   const writeEnabled = options.writeEnabled !== false
-  const analyzers = Array.isArray(options.analyzers) ? options.analyzers : []
+  const analyzers = Array.isArray(options.analyzers) ? [...options.analyzers] : []
   const log = typeof options.log === 'function' ? options.log : () => {}
   const now = typeof options.now === 'function' ? options.now : () => new Date()
   const readFileImpl = options.readFile ?? ((file) => readFile(file))
@@ -417,6 +417,21 @@ export function createDocxModel(options) {
 
   const model = {
     limits,
+
+    /**
+     * Register one analyzer for `check`; analyzers are injected by the review row
+     * so the model does not depend on legal code.
+     * @param {(input: object) => object[]|Promise<object[]>} analyzer - analyzer function.
+     * @returns {() => void} the removal disposer.
+     */
+    addAnalyzer(analyzer) {
+      if (typeof analyzer !== 'function') throw new ModelError(MODEL_CODES.INVALID_OP, 'analyzer must be a function')
+      analyzers.push(analyzer)
+      return () => {
+        const at = analyzers.indexOf(analyzer)
+        if (at !== -1) analyzers.splice(at, 1)
+      }
+    },
 
     /**
      * Open a DOCX path or byte buffer as an agent session.

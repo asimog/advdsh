@@ -18,6 +18,7 @@ import { inflateRawSync } from 'node:zlib'
 import { createDocStore } from '../docs.js'
 import { createDocxEngine, createNodeRuntime } from '../engine/manager.js'
 import { resolveEngineConfig } from '../engine/locate.js'
+import { createLegalAnalyzers } from '../review/analyzers.js'
 import { createDocxModel, MODEL_CODES } from './model.js'
 
 const modelDir = path.dirname(fileURLToPath(import.meta.url))
@@ -124,6 +125,7 @@ async function main() {
   const model = createDocxModel({
     engine,
     documents: documentsFromStore(store),
+    analyzers: createLegalAnalyzers(),
     log: (level, message, data) => log(`${level} ${message}${data === undefined ? '' : ` ${JSON.stringify(data)}`}`),
   })
   /** @type {string|undefined} */
@@ -147,6 +149,11 @@ async function main() {
     facts.target = target
     const context = await model.read(handle, { mode: 'context', blockId: target.id, before: 1, after: 2 })
     check('read_context', context.blocks.some((block) => block.id === target.id))
+
+    // --- legal analyzers over the real fixture ------------------------------
+    const analyzed = await model.check(handle)
+    facts.analysis = { codes: analyzed.codes, findings: analyzed.findings.length }
+    check('analyze_ran', Array.isArray(analyzed.codes) && Array.isArray(analyzed.findings))
 
     // --- one tracked replace + list item ------------------------------------
     const replaced = await model.edit(handle, {

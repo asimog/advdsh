@@ -158,6 +158,31 @@ under the agent's cwd: handle, path, revision, base, block count, read mode,
 editor state and pending ops. Unloading the row removes every tool and the
 context through the registration effects.
 
+## Review half (`lib/review/`, row `workspace-legal-review`)
+
+The review row registers legal analyzers on `ctx.docxModel`, the `doc_analyze`
+tool and the `legal-document-review` runtime skill. Analyzers are pure functions
+over described blocks, so `doc_check` and `doc_analyze` share one finding set.
+
+| Finding code | What it reports |
+|---|---|
+| `HEADING_LEVEL_SKIP` / `HEADING_EMPTY` / `HEADING_DUPLICATE` | Outline defects: a level jump, a heading with no text, repeated heading text. |
+| `TOC_MISMATCH` | A table-of-contents entry with no matching heading. |
+| `LIST_LEVEL_JUMP` | A numbered list item more than one level below its predecessor. |
+| `DEFINED_TERM_ORDER` | A quoted defined term used before its definition. |
+| `UNDEFINED_ABBREVIATION` | An abbreviation whose first use is not introduced in parentheses; all-caps headings are skipped and citation markers are excluded. |
+| `CROSS_REFERENCE_MISSING` | An `Exhibit`/`Annexure`/`Schedule` reference with no target heading or leading block. |
+| `CITATION_SHAPE` | A reporter citation that does not match the configured pattern (Indian Supreme Court `SCC`/`AIR` by default). |
+| `PLACEHOLDER_TEXT` | `TBD`, `TODO`, `[insert …]`, `<<…>>` and similar text left in the document. |
+| `EMPTY_PARAGRAPH_RUN` | Three or more consecutive empty paragraphs. |
+| `TABLE_HEADER_MISSING` | A table whose first row has no text. |
+
+Findings carry a stable code, a severity, a message and the affected block ids.
+`doc_analyze` can be limited to specific codes and never reports the
+`PENDING_REVISIONS` finding (that belongs to `doc_check`). The skill is
+registered only when the host mounts a skills service; the row's `legalReview`
+service exposes the code list, analyzer set and playbook.
+
 ## Client half (`lib/client.js`)
 
 - Tab type `workspace-editor` with `keepMounted: true`, body registered in
@@ -185,9 +210,8 @@ One package inserts several Cordis rows, one `engines.dsh` and one gate:
 | `workspace-docx-fanout` | `lib/fanout/index.js` | parallel editing over sub-agents |
 | `workspace-legal-review` | `lib/review/index.js` | legal analyzers and review skill |
 
-The engine, model and tools rows are implemented; the fan-out and legal-review
-rows are placeholders in this version. They load so the patch and package exports
-are stable.
+The engine, model, tools and review rows are implemented; the fan-out row is a
+placeholder in this version. It loads so the patch and package exports are stable.
 
 ## Deviations and known gaps
 
@@ -202,9 +226,10 @@ are stable.
 - The vendored Lite frontend compiles LESS at runtime, so the first open is
   slower than the release build. Set `WORKSPACE_EDITOR_FRONTEND` to the
   release editors path for a version-matched performance run.
-- The fan-out and legal-review rows are still placeholders; the engine, model and
-  `doc_*` tools are live, and `document_edit` remains the simple whole-file agent
-  path.
+- The fan-out row is still a placeholder; the engine, model, `doc_*` tools and legal
+  analyzers are live, and `document_edit` remains the simple whole-file agent path.
+- Legal analyzers are structural and textual only: fields, comments, bookmarks and
+  tracked-change metadata are not inspected yet.
 - The engine sidecar's DOCX round trip is verified on the fixture, including
   tracked `w:ins`/`w:del` with the agent author and `w14:paraId` stability across
   a save/reopen. A Word-open sweep and a duplicate-`w:id` fidelity sweep are not
