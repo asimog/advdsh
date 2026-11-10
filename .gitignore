@@ -26,6 +26,9 @@ out/
 # Local scratch verification workspace
 scratch/
 
+# Retired documents and backups: kept locally, never committed
+.agents/trash/
+
 # Logs and spike output
 *.log
 spike/**/logs/

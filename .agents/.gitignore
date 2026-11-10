@@ -1,0 +1,10 @@
+# No secrets or generated state in the record.
+.credentials.yaml
+**/.credentials.yaml
+*.key
+*.pem
+.env
+.env.*
+**/home/
+**/run/
+node_modules/

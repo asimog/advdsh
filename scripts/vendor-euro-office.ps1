@@ -15,7 +15,7 @@
 #   pwsh -File scripts\vendor-euro-office.ps1 -VerifyOnly     # check only
 #   pwsh -File scripts\vendor-euro-office.ps1 -WorkDir D:\eo   # reuse a checkout
 #
-# See .agents/docs/eurooffice-hosting-assessment.md.
+# See docs/eurooffice-hosting-assessment.md.
 
 param(
     [string]$WorkDir = (Join-Path $env:TEMP 'advodsh-euro-office-vendor'),
