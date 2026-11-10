@@ -671,7 +671,7 @@ Commands run at `93fbb83` and their recorded results:
 First attempts of the Word-open sweep failed on relative paths (Word resolved them against
 its own working directory) and on a wrong marker (`DOCMODEL-REPLACED` instead of the final
 commit's `DOCMODEL-WORD-CHECK`); both failures were corrected. No real document was opened
-or written.
+or written by that sweep; the live checks in §16.6 are separate.
 
 Executed disposable-copy checks that exposed defects:
 
@@ -691,20 +691,55 @@ fake engine replaces text instead of producing tracked delete and insert. The su
 not cover the client, routes/SSE, store lease, engine host/manager RPC or real sub-agents.
 The acceptance tests in §19 MUST fail against this code before the fix and pass after it.
 
-### 16.6 Behaviours not verified
+### 16.6 Live verification (2026-11-11)
 
-Live editor terms: mount, tab switch and restore, save, conflict banner, selection menu and
-unsaved-buffer loss (source-inspected only; no dev app was run). Live route, header,
-Origin/CSRF and SSE delivery. Live tool, sub-agent and fan-out integration (no real
-`ctx.subagents` run). A real-engine conflict run (two forks on one block; delete versus
-edit); the schema failure is source-proven, not live. Sidecar live crash, restart, cancel,
-renderer sandbox and navigation, and the production `ctx.subprocess` path. Whether the
-builder can return text without revision marks; the representation fix depends on it. Word
-accept/reject through the EuroOffice review UI (Word only opened the artifacts).
-Cross-workspace and cross-drive writes (deliberately not repeated). x2t and
-release-frontend version identity (no readable version resource). Nextcloud endpoint,
-authentication and retention, and `insertPlainText` under tracked changes. Performance and
-memory with multiple open engine sessions.
+The isolated dev Desktop was run from the pinned checkout with the `desktop` profile and the
+linked plugin, driven over CDP on port 9223. The session workspace was
+`C:\dev\advodsh\scratch`; disposable copies lived under
+`scratch/testingdocs/verify-20261111/`. Unless stated, each row is an observed result from
+this run.
+
+| Behaviour | Observed |
+|---|---|
+| Editor mount | `host.html` iframe loaded for `live-tracked.docx`, document ready, editor frame reachable, 18 blocks. |
+| Tab switch | Chat ↔ Editor switch kept the iframe mounted at 575×582; no remount loss. |
+| Session/app restart restore | The Editor tab was restored on app restart and opened the module-global `lastPath` document (`live-clean.docx`), although the tab had shown `live-tracked.docx` before the restart. This confirms D-9/W-14 live. |
+| Human save | Typed text in the live editor, invoked the editor save; revision and file hash changed to the returned SHA-256, the saved DOCX contains the typed text, and the reported modified flag cleared. |
+| Dirty banner | With the buffer dirty, an external save through the route produced the shim banner "The document was saved by another writer. Reload to work on the current revision."; the iframe stayed mounted with the dirty buffer. |
+| Conflict and buffer loss | With the buffer dirty (`modified:true`), a stale-base write returned 409 `DOC_STALE_BASE`; the client received the SSE conflict, unmounted the iframe, and displayed "Cannot open document: DOC_STALE_BASE". The Reload button then produced no iframe for at least 8 s (sticky failure), so the unsaved state was discarded with no recovery path. |
+| Selection menu | A real drag selected text and `asc_GetSelectedText` returned it; the shared menu opened with Send to chat, Ask agent and Copy. Clicking Send to chat staged the quote in the composer with the file path and the store revision. |
+| Routes and headers | `/api/info` unknown id → 404 JSON; `/api/open` without path → 400; `/host.html` → 200; `host.html` response had no CSP and no X-Frame-Options. |
+| SSE | A live `EventSource` received a snapshot frame listing 2 open documents and a `document` frame with `reload:false, source:"save"` after a save. |
+| Live tools | A real agent turn called the document tool and returned handle `doc-ff10b23573`, base revision `942572308703`, 18 blocks (17 paragraphs), full-read mode. |
+| Live sub-agents and fan-out | `doc_fanout` ran two real read-only tasks on the open document; both children returned phrase results, the merge applied 0 changes, the parent stayed at revision 0 and no edit or commit occurred. The fan-out return carried only fork status and a merge count, not the children's text, so the agent had to message the children for their answers. |
+| Word fidelity | Word opened the tracked artifact with 41 revisions; AcceptAll and RejectAll both produced saved DOCX files with 0 `w:ins`, 0 `w:del` and 0 `w:delText`; the files reopened without repair. |
+| Real-engine delete-vs-edit conflict | Merge applied 0 and returned one conflict: `base` and `parent` strings, `candidates:[{task:"delete", text:null}]`. This confirms the live null candidate text against the declared string schema (W-08) and shows the candidate key is `task`, not `taskId`. |
+| Sidecar crash and restart | Killing the sidecar process restarted it with a new pid and a reopen succeeded; cancelling before start returned `ENGINE_CANCELLED`. The restart counter read 0 after the restart and the status still listed the crashed session's stale entry (W-29). Rapidly opening a parent plus two forks caused the third renderer to fail with `Uncaught ReferenceError: AscWord is not defined`, and the fork timed out after 120 s: multi-session boot is not reliable. |
+| x2t and frontend identity | `x2t.exe` has no version resource (all version fields empty); the vendored `index.html` reports `v0.17.46-alpha` and matches the manifest pin `8f39725`; no readable converter version exists. |
+
+Defects confirmed live beyond the source proof: D-9 restore identity; D-5 path freedom (an
+absolute path outside the workspace opened with 200, and a route save wrote it); the client
+conflict path unmounts the editor and cannot recover a dirty buffer; the conflict payload
+nulls; sidecar restart accounting, stale session entries and the multi-session boot race;
+and the fan-out result omitting child text.
+
+**Verification incident.** During the outside-workspace check, `/api/save` wrote through
+the plugin to `C:\dev\advoforge\DOCSTESTING\CareSync Careseeker Agreement FINAL DRAFT Oct
+10.docx`. The original 629,195-byte file could not be recovered: the directory is
+gitignored, no copy existed in the plugin temp tree, and there was no backup because the
+store keeps none (W-12). The file now contains test bytes. This is itself evidence that the
+path confinement is absent and that exercising it is destructive. The full command log and
+evidence paths are in `.agents/logs/2026-11-11-live-verification.md`.
+
+Still not verified: accept/reject through the EuroOffice review UI (Word accept/reject was
+verified); renderer sandbox and navigation; cancellation after a request has started;
+Origin/CSRF at the HTTP layer (the desktop protocol was exercised, not a network origin);
+a successful cross-drive write (the `D:\` save-as was refused by the OS with EPERM, not by
+the plugin); the Nextcloud endpoint, authentication and retention (no instance exists);
+whether the builder can return text without revision marks (the builder `GetText` includes
+deleted text and no revision-excluding option was found in the vendored tree); performance
+and memory with several engine sessions (the three-session run failed to boot instead); and
+the web profile.
 
 ---
 
