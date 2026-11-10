@@ -101,6 +101,8 @@ function verifyDocx(buffer, author) {
   const delMatches = text.match(/<w:del\s/g) ?? []
   const authorMatches = text.match(/w:author="([^"]*)"/g) ?? []
   const authors = Array.from(new Set(authorMatches.map((value) => value.slice('w:author="'.length, -1))))
+  const revisionIds = Array.from(text.matchAll(/<w:(?:ins|del)\s[^>]*w:id="(\d+)"/g), (match) => match[1])
+  const paraIds = Array.from(text.matchAll(/w14:paraId="([0-9A-Fa-f]+)"/g), (match) => match[1])
   return {
     bytes: buffer.length,
     entries: entries.size,
@@ -114,6 +116,10 @@ function verifyDocx(buffer, author) {
     deletions: delMatches.length,
     authors,
     trackedAuthorPresent: authors.includes(author),
+    revisionIds,
+    duplicateRevisionIds: revisionIds.length - new Set(revisionIds).size,
+    paraIdCount: paraIds.length,
+    duplicateParaIds: paraIds.length - new Set(paraIds).size,
     documentXmlBytes: documentXml ? documentXml.length : 0,
     sha256: createHash('sha256').update(buffer).digest('hex'),
   }
@@ -210,6 +216,8 @@ async function main() {
     check('tracked_insertions_present', verified.insertions > 0)
     check('tracked_deletions_present', verified.deletions > 0)
     check('tracked_author_present', verified.trackedAuthorPresent, { authors: verified.authors })
+    check('tracked_ids_unique', verified.duplicateRevisionIds === 0, { duplicates: verified.duplicateRevisionIds })
+    check('para_ids_unique', verified.duplicateParaIds === 0, { duplicates: verified.duplicateParaIds })
 
     // --- reopen the saved DOCX ----------------------------------------------
     const reopened = await engine.open({ path: OUT_DOCX }, { author: AUTHOR })

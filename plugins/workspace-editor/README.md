@@ -100,8 +100,10 @@ the official sdkjs Word Document Builder from the vendored Lite tree
   --with-hooks` opens the fixture, applies a tracked replace plus a list item and
   a table row, saves through x2t, asserts the OOXML markers and the agent author,
   reopens the saved DOCX, then exercises cancelled open, stale target, timeout,
-  crash/restart, sidecar-survives-cancel and awaited exit. It writes
-  `lib/engine/out/verification.json` and exits non-zero on a failed check.
+  crash/restart, sidecar-survives-cancel and awaited exit. The saved package is
+  also checked for unique `w:ins`/`w:del` `w:id` values and unique `w14:paraId`
+  values. It writes `lib/engine/out/verification.json` and exits non-zero on a
+  failed check.
 
 ## Model half (`lib/model/`, row `workspace-docx-model`)
 
@@ -261,8 +263,8 @@ legal review, under one bundle patch, one ngines.dsh range and one gate.
   tracked-change metadata are not inspected yet.
 - The engine sidecar's DOCX round trip is verified on the fixture, including
   tracked `w:ins`/`w:del` with the agent author, `w14:paraId` stability across
-  a save/reopen, and a Word-open sweep with the tracked revisions intact. A
-  duplicate-`w:id` fidelity sweep is not part of the harness yet.
+  a save/reopen, a Word-open sweep with the tracked revisions intact, and unique
+  `w:id`/`w14:paraId` values in the saved package.
 - After a restart the tab restores the last document path (stored in
   localStorage); it does not re-open unsaved work.
 
