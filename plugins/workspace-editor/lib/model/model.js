@@ -30,6 +30,7 @@ export const MODEL_CODES = Object.freeze({
   WRITE_DISABLED: 'DOC_WRITE_DISABLED',
   WRITE_UNAVAILABLE: 'DOC_WRITE_UNAVAILABLE',
   COMMIT_FAILED: 'DOC_COMMIT_FAILED',
+  FORKED_COMMIT: 'DOC_FORKED_COMMIT',
   UNDO_UNAVAILABLE: 'DOC_UNDO_UNAVAILABLE',
   OPEN_FAILED: 'DOC_OPEN_FAILED',
 })
@@ -133,6 +134,24 @@ function formatBlock(block) {
     return `[${block.id}] (table, ${rows} row${rows === 1 ? '' : 's'})${cells === '' ? '' : ` ${cells}`}`
   }
   return `[${block.id}] ${block.text}`
+}
+
+/**
+ * Comparison signature for the three-way merge: kind, normalized text and table
+ * extent. Whitespace runs collapse so a reflow is not a semantic change.
+ * @param {object} block - described block.
+ * @returns {string} comparison signature.
+ */
+function blockSignature(block) {
+  const rows = Array.isArray(block.tableRows)
+    ? block.tableRows.map((cells) => (Array.isArray(cells) ? cells.join('\u0001') : '')).join('\u0002')
+    : ''
+  return [
+    block.kind ?? '',
+    String(block.text ?? '').replace(/\s+/g, ' ').trim(),
+    block.rows ?? '',
+    rows,
+  ].join('\u0000')
 }
 
 /** @param {Array<object>} blocks - described blocks. @returns {{ tokens: number, paragraphs: number, tables: number }} */
@@ -496,6 +515,8 @@ export function createDocxModel(options) {
         revisions: [],
         stale: false,
         cached: undefined,
+        forkChildren: new Set(),
+        fork: undefined,
       }
       byKey.set(key, handle)
       sessions.set(handle, session)
@@ -678,7 +699,9 @@ export function createDocxModel(options) {
 
       const normalized = validateOp(op)
       const engineOp = { ...normalized.engineOp }
-      if (engineOp.expectedText === undefined) {
+      // Only ops that target an existing block carry the expected-text guard;
+      // for insert ops `index` is the insertion point, not a target.
+      if (engineOp.expectedText === undefined && (normalized.type === 'replace_paragraph' || normalized.type === 'delete_paragraph')) {
         const expected = await expectedTextFor(session, engineOp)
         if (expected !== undefined) engineOp.expectedText = expected
       }
@@ -854,6 +877,9 @@ export function createDocxModel(options) {
     async commit(handle, commitOptions = {}) {
       const session = requireSession(handle)
       assertCommitStore()
+      if (session.fork !== undefined) {
+        throw new ModelError(MODEL_CODES.FORKED_COMMIT, 'a forked document cannot commit; merge the fork into its parent and commit there')
+      }
 
       if (session.stale) {
         throw new ModelError(MODEL_CODES.STALE_BASE, 'the document changed on disk since this session opened; reload it before committing', {
@@ -943,6 +969,235 @@ export function createDocxModel(options) {
         size: record.size,
         sha256: record.sha256,
         changedBlocks: record.ops,
+      }
+    },
+
+    /**
+     * Fork the current working state into an isolated engine session. A fork
+     * cannot commit; the parent merges it by stable block id.
+     * @param {string} handle - parent session handle.
+     * @param {{ label?: string }} [forkOptions] - task label for the fork and its findings.
+     * @returns {Promise<object>} fork summary with `forkedFrom` and `label`.
+     */
+    async fork(handle, forkOptions = {}) {
+      const parent = requireSession(handle)
+      assertWritesAllowed()
+      const description = await describeSession(parent)
+      const directory = await tempRoot()
+      const staged = path.join(directory, `fork-${randomUUID()}.docx`)
+      let saved
+      try {
+        saved = await engine.save(parent.engineSessionId, { targetPath: staged })
+      } catch (error) {
+        throw mapEngineError(error, MODEL_CODES.COMMIT_FAILED)
+      } finally {
+        await rm(staged, { force: true }).catch(() => {})
+      }
+      const label = typeof forkOptions.label === 'string' && forkOptions.label !== ''
+        ? forkOptions.label
+        : `fork-${parent.forkChildren.size + 1}`
+      const forkHandle = `fork-${sha256(`${parent.handle}\n${label}\n${randomUUID()}`).slice(0, 10)}`
+      const author = `agent:${forkHandle}`
+      let opened
+      try {
+        opened = await engine.open({ bytes: saved.bytes, name: parent.name }, { author })
+      } catch (error) {
+        throw mapEngineError(error, MODEL_CODES.OPEN_FAILED)
+      }
+      const baseBlocks = description.blocks.map((block) => ({ ...block }))
+      const session = {
+        handle: forkHandle,
+        path: parent.path,
+        name: parent.name,
+        contentHash: sha256(saved.bytes),
+        author,
+        engineSessionId: opened.sessionId,
+        documentId: undefined,
+        revision: 0,
+        baseRevision: parent.baseRevision,
+        openFacts: opened,
+        blocksAtOpen: opened.blocks,
+        paragraphsAtOpen: opened.paragraphs,
+        tablesAtOpen: opened.tables,
+        tokensAtOpen: description.tokens,
+        outlineAtOpen: description.outline,
+        readMode: parent.readMode,
+        baseBlocks,
+        opLog: [],
+        revisions: [],
+        stale: false,
+        cached: undefined,
+        forkChildren: new Set(),
+        fork: { parent: parent.handle, label, baseBlocks },
+      }
+      sessions.set(forkHandle, session)
+      parent.forkChildren.add(forkHandle)
+      const forkDescription = await describeSession(session).catch(() => undefined)
+      if (forkDescription !== undefined) {
+        session.baseBlocks = forkDescription.blocks
+        session.cached = forkDescription
+      }
+      log('info', 'forked document', { fork: forkHandle, parent: parent.handle, label })
+      return { ...summary(session), forkedFrom: parent.handle, label }
+    },
+
+    /**
+     * Three-way merge one or more forks of the same parent by stable block id.
+     *
+     * Unchanged-in-a-fork takes the other side; a change present in one fork (or
+     * identical changes in several) applies to the parent; a different change on
+     * both sides, delete-vs-edit, or distinct changes to one block become a
+     * conflict returned to the caller. Non-conflicting changes still apply.
+     * @param {string} handle - parent session handle.
+     * @param {string[]} forkHandles - forks of this parent.
+     * @returns {Promise<object>} applied count, conflicts and the parent revision.
+     */
+    async merge(handle, forkHandles) {
+      const parent = requireSession(handle)
+      assertWritesAllowed()
+      const forks = []
+      for (const forkHandle of Array.isArray(forkHandles) ? forkHandles : []) {
+        const fork = sessions.get(String(forkHandle))
+        if (fork === undefined || fork.fork === undefined || fork.fork.parent !== parent.handle) {
+          throw new ModelError(MODEL_CODES.INVALID_OP, `not a fork of ${parent.handle}: ${String(forkHandle)}`)
+        }
+        forks.push(fork)
+      }
+      if (forks.length === 0) throw new ModelError(MODEL_CODES.INVALID_OP, 'merge needs at least one fork')
+      const parentDescription = await describeSession(parent)
+      const parentById = new Map(parentDescription.blocks.map((block) => [block.id, block]))
+      const baseById = new Map()
+      for (const fork of forks) {
+        for (const block of fork.fork.baseBlocks) baseById.set(block.id, block)
+      }
+      const forkDescriptions = await Promise.all(forks.map((fork) => describeSession(fork)))
+      const forkByIds = forkDescriptions.map((description) => new Map(description.blocks.map((block) => [block.id, block])))
+      const ids = new Set([
+        ...baseById.keys(),
+        ...parentById.keys(),
+        ...forkByIds.flatMap((map) => [...map.keys()]),
+      ])
+      const conflicts = []
+      const replacements = []
+      const deletions = []
+      const insertions = []
+      for (const id of ids) {
+        const base = baseById.get(id)
+        const parentBlock = parentById.get(id)
+        const candidates = []
+        for (let index = 0; index < forks.length; index++) {
+          const forkBlock = forkByIds[index].get(id)
+          const changed = base === undefined
+            ? forkBlock !== undefined
+            : forkBlock === undefined ? true : blockSignature(forkBlock) !== blockSignature(base)
+          if (changed) candidates.push({ forkIndex: index, label: forks[index].fork.label, block: forkBlock })
+        }
+        if (candidates.length === 0) continue
+        const parentChanged = base === undefined
+          ? parentBlock !== undefined
+          : parentBlock === undefined ? true : blockSignature(parentBlock) !== blockSignature(base)
+        const distinct = new Map()
+        for (const candidate of candidates) {
+          const signature = candidate.block === undefined ? '<deleted>' : blockSignature(candidate.block)
+          if (!distinct.has(signature)) distinct.set(signature, candidate)
+        }
+        if (parentChanged) {
+          const parentSignature = parentBlock === undefined ? '<deleted>' : blockSignature(parentBlock)
+          if (distinct.has(parentSignature)) continue
+          conflicts.push({
+            id,
+            base: base === undefined ? null : clip(base.text, 300),
+            parent: parentBlock === undefined ? null : clip(parentBlock.text, 300),
+            candidates: candidates.map((candidate) => ({
+              task: candidate.label,
+              text: candidate.block === undefined ? null : clip(candidate.block.text, 300),
+            })),
+          })
+          continue
+        }
+        if (distinct.size > 1) {
+          conflicts.push({
+            id,
+            base: base === undefined ? null : clip(base.text, 300),
+            parent: parentBlock === undefined ? null : clip(parentBlock.text, 300),
+            candidates: [...distinct.values()].map((candidate) => ({
+              task: candidate.label,
+              text: candidate.block === undefined ? null : clip(candidate.block.text, 300),
+            })),
+          })
+          continue
+        }
+        const only = [...distinct.values()][0]
+        const block = only.block
+        if (block === undefined) {
+          deletions.push({ id, expectedText: parentBlock === undefined ? '' : parentBlock.text })
+          continue
+        }
+        if (base === undefined) {
+          const forkBlocks = forkDescriptions[only.forkIndex].blocks
+          const forkIndex = forkBlocks.findIndex((candidate) => candidate.id === id)
+          // Anchor on the nearest preceding block that exists in the base or the
+          // parent, so a fork that deleted a preceding block still inserts in the
+          // same gap as a fork that kept it (task order at one anchor).
+          let anchor = -1
+          for (let index = forkIndex - 1; index >= 0; index--) {
+            const priorId = forkBlocks[index].id
+            const prior = parentById.get(priorId) ?? baseById.get(priorId)
+            if (prior !== undefined) { anchor = prior.index; break }
+          }
+          insertions.push({ anchor: anchor + 1, order: only.forkIndex, text: block.text ?? '' })
+          continue
+        }
+        replacements.push({ id, expectedText: parentBlock === undefined ? '' : parentBlock.text, text: block.text ?? '' })
+      }
+      const applied = []
+      const failed = []
+      for (const deletion of deletions) {
+        try {
+          await model.edit(parent.handle, { type: 'delete_paragraph', blockId: deletion.id, expectedText: deletion.expectedText })
+          applied.push({ op: 'delete_paragraph', id: deletion.id })
+        } catch (error) {
+          failed.push({ id: deletion.id, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
+        }
+      }
+      for (const replacement of replacements) {
+        try {
+          await model.edit(parent.handle, {
+            type: 'replace_paragraph',
+            blockId: replacement.id,
+            expectedText: replacement.expectedText,
+            text: replacement.text,
+          })
+          applied.push({ op: 'replace_paragraph', id: replacement.id })
+        } catch (error) {
+          failed.push({ id: replacement.id, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
+        }
+      }
+      insertions.sort((left, right) => left.anchor - right.anchor || left.order - right.order)
+      const shifted = new Map()
+      for (const insertion of insertions) {
+        const offset = shifted.get(insertion.anchor) ?? 0
+        shifted.set(insertion.anchor, offset + 1)
+        try {
+          await model.edit(parent.handle, {
+            type: 'insert_paragraph',
+            index: insertion.anchor + offset,
+            text: insertion.text,
+          })
+          applied.push({ op: 'insert_paragraph', index: insertion.anchor + offset })
+        } catch (error) {
+          failed.push({ index: insertion.anchor + offset, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
+        }
+      }
+      return {
+        doc: parent.handle,
+        forks: forks.map((fork) => ({ handle: fork.handle, label: fork.fork.label })),
+        applied: applied.length,
+        operations: applied,
+        conflicts,
+        failed,
+        revision: parent.revision,
+        changed: applied.length > 0,
       }
     },
 

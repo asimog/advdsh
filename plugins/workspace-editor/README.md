@@ -183,6 +183,33 @@ Findings carry a stable code, a severity, a message and the affected block ids.
 registered only when the host mounts a skills service; the row's `legalReview`
 service exposes the code list, analyzer set and playbook.
 
+## Fan-out half (`lib/fanout/`, row `workspace-docx-fanout`)
+
+`doc_fanout(doc, tasks[], concurrency?)` runs several child agents on isolated
+forks and merges the results into the parent by stable block id, so a parent can
+review one merged change set and commit once:
+
+1. `docxModel.fork(doc, label)` serializes the working state and opens it as an
+   isolated engine session. Forks cannot commit; only the parent does.
+2. One child per fork starts through `ctx.subagents.startActivation` with
+   `provider: 'spawn'`, `delivery: 'caller'`, the parent Agent, its cwd and (only
+   when the provider supports `depthLimit`) a depth cap of
+   `delegationDepth + 1`. Children edit their own fork handle.
+3. At most `concurrency` children run at once (default 3, max 8). A failed or
+   cancelled child is isolated: the others still complete.
+4. `docxModel.merge(doc, forks)` compares base, parent and each fork by block id.
+   Unchanged-in-a-fork takes the other side; a change present in one fork or
+   identical in several applies; a different change on both sides, delete-vs-edit
+   or distinct changes to one block return as conflicts with each candidate.
+   Non-conflicting changes still apply and insertions at one anchor keep task
+   order.
+5. Forks close after the merge; the parent reviews `doc_diff`/`doc_check` and
+   commits with `doc_commit`.
+
+`doc_fanout` is registered only when writes are enabled. Fork/merge need stable
+block ids, so paragraphs use `w14:paraId` and tables use a header-derived id that
+survives save/reopen; identical tables in one document share an id.
+
 ## Client half (`lib/client.js`)
 
 - Tab type `workspace-editor` with `keepMounted: true`, body registered in
@@ -210,8 +237,8 @@ One package inserts several Cordis rows, one `engines.dsh` and one gate:
 | `workspace-docx-fanout` | `lib/fanout/index.js` | parallel editing over sub-agents |
 | `workspace-legal-review` | `lib/review/index.js` | legal analyzers and review skill |
 
-The engine, model, tools and review rows are implemented; the fan-out row is a
-placeholder in this version. It loads so the patch and package exports are stable.
+All six rows are implemented: Euro-Office host, engine, model, tools, fan-out and
+legal review, under one bundle patch, one ngines.dsh range and one gate.
 
 ## Deviations and known gaps
 
@@ -226,8 +253,7 @@ placeholder in this version. It loads so the patch and package exports are stabl
 - The vendored Lite frontend compiles LESS at runtime, so the first open is
   slower than the release build. Set `WORKSPACE_EDITOR_FRONTEND` to the
   release editors path for a version-matched performance run.
-- The fan-out row is still a placeholder; the engine, model, `doc_*` tools and legal
-  analyzers are live, and `document_edit` remains the simple whole-file agent path.
+- `document_edit` remains the simple whole-file agent path beside the `doc_*` tools.
 - Legal analyzers are structural and textual only: fields, comments, bookmarks and
   tracked-change metadata are not inspected yet.
 - The engine sidecar's DOCX round trip is verified on the fixture, including

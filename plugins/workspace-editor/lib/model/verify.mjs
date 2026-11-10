@@ -192,9 +192,31 @@ async function main() {
     const noop = await model.commit(handle)
     check('commit_noop_without_edits', noop.applied === false)
 
+    // --- fork, edit the fork, merge into the parent -------------------------
+    const fork = await model.fork(handle, { label: 'verify-fork' })
+    facts.fork = { handle: fork.handle, label: fork.label }
+    check('fork_created', fork.handle.startsWith('fork-') && fork.forkedFrom === handle)
+    const beforeMerge = await model.read(handle, { mode: 'search', query: 'DOCMODEL-FORK-EDIT' })
+    check('fork_isolated', beforeMerge.matches.length === 0)
+    const forkTarget = (await model.read(fork.handle, { mode: 'search', query: 'DOCMODEL-REPLACED' })).matches[0]
+    check('fork_reads_parent_state', forkTarget !== undefined)
+    if (forkTarget) {
+      await model.edit(fork.handle, { type: 'replace_paragraph', blockId: forkTarget.id, text: 'DOCMODEL-FORK-EDIT' })
+    }
+    const merged = await model.merge(handle, [fork.handle])
+    facts.merge = { applied: merged.applied, conflicts: merged.conflicts.length, failed: merged.failed.length }
+    check('merge_applied', merged.applied === 1 && merged.conflicts.length === 0, facts.merge)
+    const mergedView = await model.read(handle, { mode: 'search', query: 'DOCMODEL-FORK-EDIT' })
+    check('parent_has_merged_text', mergedView.matches.length > 0)
+    const forkCommit = await model.commit(fork.handle, { force: true }).then(() => null, (error) => error)
+    check('fork_cannot_commit', forkCommit !== null && forkCommit.code === MODEL_CODES.FORKED_COMMIT, forkCommit && forkCommit.code)
+    const afterMergeCommit = await model.commit(handle)
+    check('commit_after_merge', afterMergeCommit.applied === true)
+    await model.close(fork.handle)
+
     // --- lease refusals ------------------------------------------------------
     await model.reload(handle)
-    const afterReload = await model.read(handle, { mode: 'search', query: 'DOCMODEL-REPLACED' })
+    const afterReload = await model.read(handle, { mode: 'search', query: 'DOCMODEL-FORK-EDIT' })
     facts.reloadTarget = {
       before: target.id,
       after: afterReload.matches[0]?.id ?? null,

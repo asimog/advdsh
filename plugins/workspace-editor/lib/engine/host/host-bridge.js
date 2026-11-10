@@ -192,6 +192,21 @@
     return getApi().GetDocument()
   }
 
+  /**
+   * Deterministic 32-bit FNV-1a hash for ids that must be equal across editor
+   * sessions and save/reopen round trips.
+   * @param {string} text - hash input.
+   * @returns {string} eight hex digits.
+   */
+  function stableHash(text) {
+    let hash = 0x811c9dc5
+    for (let index = 0; index < text.length; index++) {
+      hash ^= text.charCodeAt(index)
+      hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+    return hash.toString(16).padStart(8, '0')
+  }
+
   /** Session-stable ID for one body element; paraId is exposed separately. */
   function elementInfo(element, index) {
     const info = { index: index, kind: 'unknown', id: null, text: '', style: null, paraId: null, rows: null }
@@ -224,7 +239,6 @@
         if (numbering) info.numbering = { level: numbering.GetLevelIndex() }
       } catch (error) {}
     } else if (kind === 'table') {
-      info.id = internalId !== null && internalId !== undefined ? 't:' + internalId : 'i:' + index
       const rows = []
       try {
         const count = element.GetRowsCount()
@@ -247,6 +261,11 @@
       info.cells = null
       info.text = rows.map((cells) => cells.join('\t')).join('\n')
       info.tableRows = rows
+      // Tables have no w14:paraId. Key the id on the header row and column count
+      // so it survives save/reopen and row insertions, which is what fork/merge
+      // matches on; identical tables in one document share an id by design.
+      const header = rows[0] ?? []
+      info.id = 't:' + stableHash(`${header.join('\u0001')}\u0002${header.length}`)
     } else {
       info.id = internalId !== null && internalId !== undefined ? 'e:' + internalId : 'i:' + index
       try { info.text = element.GetText ? String(element.GetText({ Numbering: false, Math: false })) : '' } catch (error) {}

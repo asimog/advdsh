@@ -43,7 +43,16 @@ export function createFakeEngine(blocks = initialBlocks()) {
     async open(input, options) {
       calls.push({ method: 'open', input, options })
       const sessionId = `s${++serial}`
-      const copy = blocks.map((block) => ({ ...block }))
+      let starting = blocks
+      if (input && input.bytes !== undefined) {
+        try {
+          const parsed = JSON.parse(Buffer.from(input.bytes).toString('utf8'))
+          if (Array.isArray(parsed)) starting = parsed
+        } catch (error) {
+          // Not a fixture snapshot: open the fixture document instead.
+        }
+      }
+      const copy = starting.map((block) => ({ ...block }))
       sessions.set(sessionId, { blocks: copy, base: copy.map((block) => ({ ...block })), revision: 0 })
       const description = describePayload(copy)
       return {
@@ -132,7 +141,8 @@ export function createFakeEngine(blocks = initialBlocks()) {
     async save(sessionId, options) {
       calls.push({ method: 'save', sessionId, options })
       const session = sessions.get(sessionId)
-      return { bytes: DOCX, path: options?.targetPath, size: DOCX.length, sha256: 'saved-hash', revision: ++session.revision }
+      const bytes = Buffer.from(JSON.stringify(session.blocks), 'utf8')
+      return { bytes, path: options?.targetPath, size: bytes.length, sha256: 'saved-hash', revision: ++session.revision }
     },
     async close(sessionId) {
       calls.push({ method: 'close', sessionId })

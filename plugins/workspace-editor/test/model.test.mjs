@@ -207,3 +207,85 @@ test('dispose closes every engine session', async () => {
   assert.equal(model.status().length, 0)
   assert.equal(engine.calls.filter((call) => call.method === 'close').length, 2)
 })
+
+test('fork isolates the working state and a fork cannot commit', async () => {
+  const documents = createFakeDocuments()
+  const { model } = createModel({ documents })
+  const opened = await model.open(PATH)
+  await model.edit(opened.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'Parent edit.' })
+  const fork = await model.fork(opened.handle, { label: 'task-a' })
+  assert.match(fork.handle, /^fork-/)
+  assert.equal(fork.forkedFrom, opened.handle)
+  assert.equal(fork.label, 'task-a')
+  const forkedRead = await model.read(fork.handle, { mode: 'full' })
+  assert.match(forkedRead.text, /Parent edit\./, 'the fork starts from the parent working state')
+  await model.edit(fork.handle, { type: 'replace_paragraph', blockId: 'p:3', text: 'Fork edit.' })
+  const parentRead = await model.read(opened.handle, { mode: 'full' })
+  assert.match(parentRead.text, /Respectfully submitted\./)
+  assert.doesNotMatch(parentRead.text, /Fork edit/)
+  await assert.rejects(
+    () => model.commit(fork.handle, { force: true }),
+    (error) => error.code === MODEL_CODES.FORKED_COMMIT,
+  )
+})
+
+test('merge applies non-conflicting fork changes to the parent by block id', async () => {
+  const documents = createFakeDocuments()
+  const { model } = createModel({ documents })
+  const opened = await model.open(PATH)
+  const fork = await model.fork(opened.handle, { label: 'rewrite-p3' })
+  await model.edit(fork.handle, { type: 'replace_paragraph', blockId: 'p:3', text: 'Filed on 10 November 2026.' })
+  const merged = await model.merge(opened.handle, [fork.handle])
+  assert.equal(merged.conflicts.length, 0)
+  assert.equal(merged.applied, 1)
+  assert.equal(merged.changed, true)
+  const parentRead = await model.read(opened.handle, { mode: 'full' })
+  assert.match(parentRead.text, /Filed on 10 November 2026\./)
+  const committed = await model.commit(opened.handle)
+  assert.equal(committed.applied, true)
+})
+
+test('merge returns a conflict for different changes to one block', async () => {
+  const { model } = createModel()
+  const opened = await model.open(PATH)
+  const first = await model.fork(opened.handle, { label: 'first' })
+  const second = await model.fork(opened.handle, { label: 'second' })
+  await model.edit(first.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'First version.' })
+  await model.edit(first.handle, { type: 'replace_paragraph', blockId: 'p:3', text: 'First closing.' })
+  await model.edit(second.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'Second version.' })
+  const merged = await model.merge(opened.handle, [first.handle, second.handle])
+  assert.equal(merged.conflicts.length, 1)
+  assert.equal(merged.conflicts[0].id, 'p:2')
+  assert.equal(merged.conflicts[0].candidates.length, 2)
+  assert.deepEqual(merged.conflicts[0].candidates.map((candidate) => candidate.task).sort(), ['first', 'second'])
+  assert.equal(merged.applied, 1, 'the non-conflicting closing change still applies')
+  const parentRead = await model.read(opened.handle, { mode: 'full' })
+  assert.match(parentRead.text, /First closing\./)
+  assert.match(parentRead.text, /Plaintiff seeks entry/, 'the conflicted block keeps the parent text')
+})
+
+test('merge keeps fork order for insertions at one anchor and applies deletions', async () => {
+  const { model } = createModel()
+  const opened = await model.open(PATH)
+  const first = await model.fork(opened.handle, { label: 'first' })
+  const second = await model.fork(opened.handle, { label: 'second' })
+  await model.edit(first.handle, { type: 'insert_paragraph', index: 4, text: 'FIRST-INSERT' })
+  await model.edit(second.handle, { type: 'insert_paragraph', index: 4, text: 'SECOND-INSERT' })
+  await model.edit(second.handle, { type: 'delete_paragraph', blockId: 'p:1', expectedText: 'IN THE UNITED STATES DISTRICT COURT' })
+  const merged = await model.merge(opened.handle, [first.handle, second.handle])
+  assert.equal(merged.conflicts.length, 0)
+  assert.equal(merged.applied, 3)
+  const parentRead = await model.read(opened.handle, { mode: 'full' })
+  assert.match(parentRead.text, /FIRST-INSERT\n\[.*\] SECOND-INSERT/, 'insertions keep fork order')
+  assert.doesNotMatch(parentRead.text, /UNITED STATES DISTRICT COURT/)
+})
+
+test('merge refuses a handle that is not a fork of the parent', async () => {
+  const { model } = createModel()
+  const opened = await model.open(PATH)
+  const other = await model.open({ path: 'C:/docs/Other.docx' })
+  await assert.rejects(
+    () => model.merge(opened.handle, [other.handle]),
+    (error) => error.code === MODEL_CODES.INVALID_OP,
+  )
+})
