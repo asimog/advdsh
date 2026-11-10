@@ -225,4 +225,4 @@ S1 is the critical path: S0 proved the builder runs headlessly, so the remaining
 
 - `.agents/docs/eurooffice-hosting-assessment.md` — why EuroOfficeLite is vendored and how the engine choice is gated.
 - Per-row README sections in `plugins/workspace-editor/README.md` — routes, services, events, tools, env vars, limits.
-- `.agents/logs/2026-11-10-legal-docx-workspace-engine.md` and `.agents/prompts/2026-11-10-successor-legal-docx-workspace-engine.md` — engine session record and successor brief.
+- `.agents/logs/2026-11-10-legal-docx-workspace-engine.md` and `.agents/prompts/2026-11-10-successor-docx-model-tools.md` — engine session record and S2 successor brief.
