@@ -240,6 +240,20 @@ async function main() {
     check('reload_after_conflict', typeof reloaded.baseRevision === 'string' && reloaded.baseRevision.length === 64)
     const status = model.status()
     check('status_reports_session', status.length === 1 && status[0].handle === handle, status)
+
+    // --- leave a committed, tracked artifact for the Word-open sweep --------
+    const wordTarget = (await model.read(handle, { mode: 'search', query: 'temporary restraining' })).matches[0]
+    check('word_target_found', wordTarget !== undefined)
+    if (wordTarget) {
+      await model.edit(handle, {
+        type: 'replace_paragraph',
+        blockId: wordTarget.id,
+        text: 'DOCMODEL-WORD-CHECK',
+      })
+      const finalCommit = await model.commit(handle)
+      facts.finalCommit = { applied: finalCommit.applied, revision: finalCommit.revision, size: finalCommit.size }
+      check('final_commit_for_word', finalCommit.applied === true)
+    }
   } finally {
     if (handle !== undefined) await model.close(handle).catch(() => {})
     await model.dispose().catch(() => {})

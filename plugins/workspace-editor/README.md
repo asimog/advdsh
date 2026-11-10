@@ -131,8 +131,11 @@ mints a new one.
   `DOC_WRITE_DISABLED`; the tools row also omits `doc_edit`/`doc_commit`.
 - **Verification.** `node lib/model/verify.mjs` runs the model over the real
   engine and document store: reads, tracked replace + list item, diff, check,
-  commit, OOXML markers/author, reload, dirty and stale refusals. It writes
-  `lib/model/out/verification.json` and exits non-zero on a failed check.
+  fork/merge, commit, OOXML markers/author, reload, dirty and stale refusals. It
+  writes `lib/model/out/verification.json` and exits non-zero on a failed check.
+  `scripts/verify-word-open.ps1 -Docx <file> -Marker <text>` opens the saved DOCX
+  through Word COM with alerts and macros disabled and asserts it opens with its
+  tracked revisions; it writes a log and exits non-zero on failure.
 
 ## Tool half (`lib/tools/`, row `workspace-docx-tools`)
 
@@ -257,9 +260,9 @@ legal review, under one bundle patch, one ngines.dsh range and one gate.
 - Legal analyzers are structural and textual only: fields, comments, bookmarks and
   tracked-change metadata are not inspected yet.
 - The engine sidecar's DOCX round trip is verified on the fixture, including
-  tracked `w:ins`/`w:del` with the agent author and `w14:paraId` stability across
-  a save/reopen. A Word-open sweep and a duplicate-`w:id` fidelity sweep are not
-  part of the harness yet.
+  tracked `w:ins`/`w:del` with the agent author, `w14:paraId` stability across
+  a save/reopen, and a Word-open sweep with the tracked revisions intact. A
+  duplicate-`w:id` fidelity sweep is not part of the harness yet.
 - After a restart the tab restores the last document path (stored in
   localStorage); it does not re-open unsaved work.
 
