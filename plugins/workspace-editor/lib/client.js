@@ -110,6 +110,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState(false)
       const [reloadToken, setReloadToken] = react.useState(0)
       const [loadedMtime, setLoadedMtime] = react.useState(0)
+      const [loadedRevision, setLoadedRevision] = react.useState('')
       const docRef = react.useRef(undefined)
       const frameRef = react.useRef(null)
 
@@ -133,6 +134,7 @@ window.__ModuleLoader__.load({
             if (!live) return
             setDoc({ ...opened, path: typeof state.path === 'string' && state.path !== '' ? state.path : wanted })
             setLoadedMtime(state.mtimeMs ?? 0)
+            setLoadedRevision(typeof state.revision === 'string' ? state.revision : '')
             setReloadToken((value) => value + 1)
           })
           .catch((error) => { if (live) setFailure(error instanceof Error ? error.message : String(error)) })
@@ -157,14 +159,14 @@ window.__ModuleLoader__.load({
           const rect = frame.getBoundingClientRect()
           openSelectionMenu({
             path: typeof doc.path === 'string' && doc.path !== '' ? doc.path : wanted,
-            revision: loadedMtime,
+            revision: loadedRevision !== '' ? loadedRevision : loadedMtime,
             text: data.text,
             dirty: data.dirty === true,
           }, { x: rect.left + data.x, y: rect.top + data.y })
         }
         window.addEventListener('message', onMessage)
         return () => { window.removeEventListener('message', onMessage) }
-      }, [doc, wanted, loadedMtime, openSelectionMenu])
+      }, [doc, wanted, loadedMtime, loadedRevision, openSelectionMenu])
 
       // Pick up agent edits: reload only while the editor holds no unsaved work.
       react.useEffect(() => {
@@ -177,6 +179,7 @@ window.__ModuleLoader__.load({
               if (state.modified === true) return
               if (state.mtimeMs !== loadedMtime) {
                 setLoadedMtime(state.mtimeMs)
+                setLoadedRevision(typeof state.revision === 'string' ? state.revision : '')
                 setReloadToken((value) => value + 1)
               }
             })
@@ -184,6 +187,49 @@ window.__ModuleLoader__.load({
         }, 4000)
         return () => { clearInterval(timer) }
       }, [doc, loadedMtime])
+
+      // The shared events channel is the primary revision signal: reload on an
+      // apply-world document reload frame for this path and surface conflicts.
+      // The poll above stays as the fallback when EventSource is unavailable.
+      react.useEffect(() => {
+        if (doc === undefined || typeof EventSource !== 'function') return undefined
+        let source = null
+        try {
+          source = new EventSource(`${ROUTE}/events`)
+        } catch (error) {
+          return undefined
+        }
+        const onFrame = (event) => {
+          let frame
+          try {
+            frame = JSON.parse(event.data)
+          } catch (error) {
+            return
+          }
+          if (frame === null || typeof frame !== 'object') return
+          const framePath = frame.type === 'conflict'
+            ? (typeof frame.path === 'string' ? frame.path : '')
+            : (frame.document && typeof frame.document.path === 'string' ? frame.document.path : '')
+          if (framePath !== '' && framePath.toLowerCase() !== String(doc.path || '').toLowerCase()) return
+          if (frame.type === 'conflict') {
+            setFailure(typeof frame.code === 'string' ? frame.code : 'conflict')
+            return
+          }
+          if (frame.type !== 'document' || frame.reload !== true) return
+          fetch(`${ROUTE}/api/info?id=${encodeURIComponent(doc.id)}`)
+            .then(readJson)
+            .then((state) => {
+              if (state.modified === true) return
+              setLoadedMtime(state.mtimeMs ?? 0)
+              setLoadedRevision(typeof state.revision === 'string' ? state.revision : '')
+              setFailure('')
+              setReloadToken((value) => value + 1)
+            })
+            .catch(() => {})
+        }
+        source.addEventListener('message', onFrame)
+        return () => { try { source.close() } catch (error) {} }
+      }, [doc])
 
       const header = react.createElement(
         'div',
@@ -284,7 +330,9 @@ window.__ModuleLoader__.load({
           value: {
             sessionId,
             path: typeof selection.path === 'string' ? selection.path : '',
-            revision: typeof selection.revision === 'number' ? selection.revision : 0,
+            revision: typeof selection.revision === 'string'
+              ? selection.revision
+              : typeof selection.revision === 'number' ? String(selection.revision) : '',
             text: typeof selection.text === 'string' ? selection.text : '',
             dirty: selection.dirty === true,
           },
@@ -306,7 +354,9 @@ window.__ModuleLoader__.load({
           const selection = {
             sessionId,
             path: typeof value.path === 'string' ? value.path : '',
-            revision: typeof value.revision === 'number' ? value.revision : 0,
+            revision: typeof value.revision === 'string'
+              ? value.revision
+              : typeof value.revision === 'number' ? String(value.revision) : '',
             text,
             dirty: value.dirty === true,
           }

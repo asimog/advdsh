@@ -226,8 +226,14 @@ survives save/reopen; identical tables in one document share an id.
 - Right-click on a non-empty selection inside the editor: the host page relays
   the selection; the tab opens the shared DSH context menu with **Send to
   chat**, **Ask agent** and **Copy**. Send/Ask stage a Markdown quote plus the
-  document path, revision and dirty flag through the session's composer input
+  document path, the content revision the tab loaded (SHA-256, falling back to
+  the file mtime) and the dirty flag through the session's composer input
   (`insertQuote`, `focus`, `submit`); Copy uses the clipboard.
+- The tab reloads on a shared `events` SSE document-reload frame for its path
+  (and surfaces a `conflict` frame); a 4 s `/api/info` poll remains as the
+  fallback when `EventSource` is unavailable. The host page consumes the same
+  channel for review command frames and reports editor state back on
+  `POST /api/editor`.
 
 ## Bundle rows (`cordis.patch.yml`)
 
