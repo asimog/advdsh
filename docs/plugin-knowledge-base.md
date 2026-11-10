@@ -153,12 +153,12 @@ verdict stays with the owner.
 | `workspace-docx-fanout` | `lib/fanout/index.js` | `doc_fanout` over `ctx.subagents` |
 | `workspace-legal-review` | `lib/review/index.js` | Deterministic analyzers, `doc_analyze`, review skill |
 
-Surfaces today: one page tab `workspace-editor` with a selection context menu and composer
-staging; ~17 host routes under `/workspace-editor` plus an events SSE stream; a leased
-document store with SHA-256 revisions; a sidecar engine over loopback RPC; 12 agent tools.
-The normative specification is [legal-docx-workspace.md](legal-docx-workspace.md); the
-evidence and open defects are in `scratch/testingdocs/workspace-editor-final-audit-report.md`;
-the plugin contract is the plugin README.
+Surfaces today: one page tab `workspace-editor` (the specification targets resource-address
+tabs) with a selection context menu and composer staging; ~17 host routes under
+`/workspace-editor` plus an events SSE stream; a leased document store with SHA-256
+revisions; a sidecar engine over loopback RPC; 12 agent tools. The normative specification
+is [legal-docx-workspace.md](legal-docx-workspace.md); it contains the known defects, the
+required corrections and the acceptance gates. The plugin contract is the plugin README.
 
 ## Pitfalls recorded in this workspace
 

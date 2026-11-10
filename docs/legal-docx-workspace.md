@@ -1,22 +1,22 @@
-# Legal DOCX workspace — specification (revision 2)
+# Legal DOCX workspace — specification (revision 3)
 
-Status: normative specification. This document supersedes the earlier
-"current design" narrative of the same path. It states the target design, the current
-conformance status, and the acceptance gates for the audit fixes.
+Status: normative specification and single source of truth for the component. It states the
+target design, the behaviour that must be corrected at `93fbb83`, the verified controls, and
+the acceptance gates. It does not point at separate documents; everything needed to
+implement or verify the component is in this document.
 
 | | |
 |---|---|
 | Component | `workspace-editor` bundle, six Cordis rows, version `0.3.0` (target `0.4.0` after P0) |
-| Specification revision | 2 (this document) |
-| Audit basis | [workspace-editor-final-audit-report.md](../scratch/testingdocs/workspace-editor-final-audit-report.md) and the first report's detailed ledger |
+| Specification revision | 3 (this document) |
 | Framework | DSH `0.2.2-rc.1`, Cordis `4.1.0`, pinned read-only in `upstream/deepseek-harness` |
 | Editor | vendored EuroOfficeLite frontend at `resources/euro-office`, unmodified |
-| Decision record | this file; deferred work is listed in §18; conformance in §17 |
+| Evidence basis | source re-read and executed disposable-copy probes at `93fbb83`; observed behaviour in §16 |
 
 Requirement notation: **MUST** is a normative requirement identified as `WD-xxx`;
-**SHOULD** is recommended; **MAY** is optional. Status labels in §17:
-**Implemented** (code exists), **Verified** (acceptance evidence exists),
-**Gap** (audit defect, must be fixed), **Deferred** (a later release).
+**SHOULD** is recommended; **MAY** is optional. Defects in §16 are current behaviour, not
+requirements. Status labels in §17: **Implemented** (code exists), **Verified** (acceptance
+evidence exists), **Gap** (known defect, must be fixed), **Deferred** (a later release).
 
 ---
 
@@ -42,8 +42,8 @@ right-click gesture that stages document text into the composer for reasoning.
 6. Multi-document editing through resource-address tabs, with per-workspace view and
    document identity.
 7. Backups, bounded history and working-state undo.
-8. One controlled, auditable review authority: the human decides by default; the agent may
-   accept or reject only when explicitly instructed.
+8. One controlled, reviewable authority: the human decides by default; the agent may accept
+   or reject only when explicitly instructed.
 9. Evidence that can fail: exact-text and structural assertions, real-profile acceptance.
 
 ### 1.3 Non-goals
@@ -83,7 +83,8 @@ no requirement remains **Gap**. Deferred items are explicit in §18.
 
 ## 3. Architecture
 
-One bundle package, six Cordis rows, one client module. No separate publishable bundles in this revision.
+One bundle package, six Cordis rows, one client module. No separate publishable bundles in
+this revision.
 
 | Row | Module | Provides | Consumes | Listens |
 |---|---|---|---|---|
@@ -94,10 +95,10 @@ One bundle package, six Cordis rows, one client module. No separate publishable 
 | `workspace-docx-fanout` | `lib/fanout/index.js` | `doc_fanout` | `tools`, `docxModel`, `subagents` | — |
 | `workspace-legal-review` | `lib/review/index.js` | `doc_analyze`, review skill | `tools`, `docxModel`, optional `skills` | — |
 
-Row contract: a row declares only the services it provides and the listeners it owns. A
-row MUST NOT claim a service it does not provide, and a row that owns a registration MUST
-dispose it as a Cordis effect. The earlier statement "every plugin provides a service,
-listens to events and emits events" is retired; several rows are registrars only.
+Row contract: a row declares only the services it provides and the listeners it owns. A row
+MUST NOT claim a service it does not provide, and a row that owns a registration MUST dispose
+it as a Cordis effect. The statement "every plugin provides a service, listens to events and
+emits events" is not a requirement; several rows are registrars only.
 
 ```
 Chat pane (DSH)  ◀── staged quote / inputActions ──  right-dock resource tab
@@ -142,7 +143,7 @@ seam. The store validates the base revision, refuses a dirty editor, writes atom
 
 `WD-101` The `document_edit` tool MUST be removed. It is a second write authority: always
 registered, unaffected by `WORKSPACE_DOCX_WRITE`, no lease, no base check, no tracked
-changes. Removal is a public agent-surface change; owner approval is recorded in §16.
+changes. Removal is a public agent-surface change; owner approval is recorded in §21.
 
 `WD-102` `docxEngine.save` MUST be callable only with a manager-provided staging path.
 Callers cannot supply an arbitrary target. The model stages bytes in the engine temp root
@@ -328,8 +329,8 @@ are canonical; presenters and replay metadata are defined with the tool.
 
 `WD-312` Error codes are structured and survive the tool boundary: `DOC_STALE_BASE`,
 `DOC_EDITOR_DIRTY`, `DOC_STALE_TARGET`, `DOC_INVALID_OP`, `DOC_UNSUPPORTED_EDIT`,
-`DOC_SESSION_NOT_FOUND`, `DOC_TOO_LARGE`, `DOC_COMMIT_FAILED`, `DOC_UNSUPPORTED_EDIT`,
-`DOC_OUTSIDE_WORKSPACE`.
+`DOC_SESSION_NOT_FOUND`, `DOC_TOO_LARGE`, `DOC_COMMIT_FAILED`, `DOC_OUTSIDE_WORKSPACE`,
+`DOC_CONFLICT`.
 
 `WD-313` `editor` review commands use one vocabulary shared with the host page and await an
 acknowledgement. Fire-and-forget delivery is not success.
@@ -348,7 +349,7 @@ identity; it persists, deduplicates and restores. One tab per document; opening 
 open document reveals it.
 
 `WD-321` The tab is workspace-scoped: its identity is the workspace path plus the document
-address. A restored tab reopens its own document, never a module-global "last path".
+address. A restored tab reopens its own document; there is no module-global "last path".
 `localStorage` is not a document identity. There is no module-level `currentDocId`.
 
 `WD-322` The close handler receives `(sessionId, tab)` and closes the document for that tab
@@ -360,7 +361,7 @@ never discarded by a reload or conflict path; the user chooses Save, Reload or D
 
 `WD-324` The Edit action on a document preview opens or reveals the resource tab for that
 path. Agent-side `editor open` reveals the same tab. The File menu and Ctrl+O are defined
-behaviour, not a dead path: they open the DSH file picker and the resulting document.
+behaviour: they open the DSH file picker and the resulting document.
 
 `WD-325` Review mode and the tracked-change UI remain the vendored editor's; the plugin does
 not replace the review UI. Accept/reject commands are dispatched to the page and
@@ -390,10 +391,11 @@ base: a candidate block is applied when it differs from the base in a way that c
 reconstructed, and when the parent still matches the base. Anything else is a typed
 conflict.
 
-`WD-334` Conflict payload: `{ id, base: string, parent: string, candidates: [{ taskId, text }] }`.
-Deleted or absent blocks use an explicit nullable representation, and the tool schema
-declares it so canonical output validation cannot fail. A merge that encounters a conflict
-returns it as data, never as `INVALID_TOOL_OUTPUT`.
+`WD-334` Conflict payload: `{ id, base: string | null, parent: string | null,
+candidates: [{ taskId, text: string | null }] }`. Deleted or absent blocks use the explicit
+nullable representation, and the tool schema declares it so canonical output validation
+cannot fail. A merge that encounters a conflict returns it as data, never as
+`INVALID_TOOL_OUTPUT`.
 
 `WD-335` Insertions are ordered deterministically: same-anchor insertions keep task order;
 anchors are rebased after deletions. The final order is asserted exactly.
@@ -415,9 +417,9 @@ blocks without writing the parent.
 ## 12. Scope, paths and security
 
 `WD-120` Paths are confined to the DSH session workspace root. `doc_open`, `doc_commit`,
-`doc_state` wait, save-as, `document_edit` (removed) and every route resolve against that
-root or take an absolute path that lies inside it. Escapes are refused with
-`DOC_OUTSIDE_WORKSPACE`. A configuration may add explicit allowed roots; it is not a default.
+`doc_state` wait, save-as and every route resolve against that root or take an absolute path
+that lies inside it. Escapes are refused with `DOC_OUTSIDE_WORKSPACE`. A configuration may
+add explicit allowed roots; it is not a default.
 
 `WD-121` Registries, handles, sessions and SSE are scoped to the DSH session. `doc_state
 status` and the runtime context expose only the calling session's documents. The file lease
@@ -479,59 +481,258 @@ memory state is never the only copy.
 
 ## 15. Performance and limits
 
-`WD-150` The spec fixes budgets, measured not assumed: editor boot after cache warm; open,
-first read, edit, diff and commit on a 100-page document; markup read token/node bounds;
-maximum concurrent engine sessions; SSE heartbeat and cleanup. Values are recorded in the
-plugin README and verified in the performance gate.
+`WD-150` The specification fixes budgets, measured not assumed: editor boot after cache
+warm; open, first read, edit, diff and commit on a 100-page document; markup read token/node
+bounds; maximum concurrent engine sessions; SSE heartbeat and cleanup. Values are recorded
+in the plugin README and verified in the performance gate.
 
 `WD-151` The OOXML view is bounded by node and token limits. Exceeding a bound returns a
 typed truncation with the next range, never a silent partial view.
 
 ---
 
-## 16. Owner decisions recorded
+## 16. Current behaviour and known defects at `93fbb83`
 
-1. The updated spec is one normative document (this file), not a separate requirements file.
-2. OOXML view: core markup coverage; curated structural ops only; no raw XML writes; agent
-   edits, human read-only inspector. Vendored editor unmodified.
-3. `document_edit` is removed. Public agent-surface change; approved here.
-4. Paths confined to the session workspace; session-scoped registries; the file lease is the
-   only cross-session state.
-5. Backups plus a versioned store adapter; `doc_undo` exposed.
-6. Merge: representation fix, derivation checks and deterministic conflicts now; the
-   end-of-session edit generator is deferred.
-7. Stable IDs minted and persisted; table/list merge included.
-8. Review authority: human default; the agent may accept/reject only on explicit
-   instruction, logged.
-9. Multi-document: resource-address tabs; per-workspace view and document identity.
-10. This specification keeps table/list merge, stable IDs and the live browser e2e gate. The remaining
-    deferred items are listed in §18.
+This section is the evidence base for the corrections. It describes what the code does now,
+where, and what was observed in executed checks on disposable copies. It is not required
+behaviour; the requirements are in §5–§15. Line references are to `plugins/workspace-editor`
+at `93fbb83` and identify the mechanism, not the only place to change.
+
+### 16.1 Critical defects
+
+**D-1 — Merge adopts contaminated block text (W-01, W-03).**
+The engine's `describe()` text includes the text of tracked deletions (`GetText` returns
+deleted runs as well as live runs), for example
+`Sometime onin August 2023, … to the rRespondent for the job.`. Merge compares and adopts
+whole blocks (`lib/model/model.js:1101,1148,1151`) and re-applies the fork's block text to
+the parent. Executed on a clean fixture: the intended result `CLEAN-MERGE-EXACT-TEXT` was
+saved as live text `024Dated: February 8, 2024CLEAN-MERGE-EXACT-TEXT`, with the preceding
+`Dated: February 8, 2` present only in deleted text. Executed on a revision-bearing fixture:
+the intended `MERGE-ADOPTED-EXACT-TEXT` produced duplicated live text
+`Respondent for the job. … MERGE-ADOPTED-EXACT-TEXT`. In both runs merge returned
+`applied:1, conflicts:[], failed:[]`, the commit applied, `doc_diff` reported clean, and the
+OOXML stayed structurally valid (46 paragraphs, unique paraIds and revision IDs). Marker
+counts and structural checks cannot detect this. Violates I-3, I-9, I-10 and requires WD-307,
+WD-333.
+
+**D-2 — `document_edit` is a second write authority (W-02).**
+The tool is registered unconditionally in the host row (`lib/index.js:562-624`), is not
+affected by `WORKSPACE_DOCX_WRITE`, and writes via `lib/docs-edit.js:52-109`: rewrite
+`word/document.xml` with JSZip, then `writeFile` and `rename` over the file. It uses no
+store, lease, base revision, dirty check or tracked-change handling. Executed with the
+editor dirty: the write succeeded, the file hash and the store revision changed behind the
+lease, and the dirty flag stayed true. Executed on a revision-bearing copy: editing one
+paragraph dropped 4 insertions and 5 deletions (document totals 19/14 → 15/9) while the
+package stayed valid. With `WORKSPACE_DOCX_WRITE=off`, this tool remained the only write
+path, so the gate is not a read-only boundary. Violates I-1, I-2, I-7 and requires WD-101,
+WD-310.
+
+### 16.2 High defects
+
+**D-3 — Agent-visible text is not the live text (W-03).**
+`doc_read`, `doc_search`, analyzers and expected-text checks consume block text that mixes
+live and deleted runs (`lib/engine/host-bridge.js:242,330-332`). A search for a phrase the
+user can see returned 0 matches when the phrase was split by a tracked deletion. This is the
+root cause of D-1 and must be fixed at the view layer, not in merge alone. Requires
+WD-307, WD-300.
+
+**D-4 — A successful commit marks its own session stale (W-04).**
+`applyBytes` emits `saved` synchronously before `commit()` advances `baseRevision`
+(`lib/docs.js:440`; `lib/index.js:248`; `lib/model/index.js:34-38`;
+`lib/model/model.js:926-973,1300-1313`). The model's `noteSaved` sets `stale`, and `rebase()`
+never clears it. Executed: `status()[0].stale === true` immediately after `applied:true`;
+the next commit was refused with `DOC_STALE_BASE` until `doc_state reload`. Requires
+WD-132, WD-135.
+
+**D-5 — No path confinement in the document surface (W-05).**
+`doc_open`, `doc_commit`, `doc_state` wait, `document_edit` and `/api/open` accept absolute
+paths with no workspace boundary; `/api/save-as` writes to an arbitrary absolute target
+(`lib/model/model.js:461-479`; `lib/docs.js:298-306,501-514`; `lib/index.js:396-454`), and
+for a PDF document it writes the request body unchanged, so the write is not a DOCX save.
+Requires WD-120, WD-103.
+
+**D-6 — No session owner for store, model, leases or SSE (W-06).**
+The registry, model sessions, leases and SSE are one set per plugin activation
+(`lib/docs.js:219-233`; `lib/model/model.js:261-266`; `lib/index.js:349-393`). `doc_state
+status` lists every open session and the SSE snapshot broadcasts every open document to
+every subscriber. Requires WD-121, WD-108.
+
+**D-7 — Fan-out children are not constrained and the conflict payload is invalid (W-07,
+W-08, W-34, W-35).**
+Children inherit the global tool registry and receive the parent handle in their prompt
+(`lib/fanout/index.js:278-285`; `lib/tools/index.js:798-810`); no `ctx.tools.restrict` is
+used, so a child can edit, force-commit or close the parent or call `document_edit`.
+`doc_fanout` declares conflict `base`/`parent`/`candidate.text` as strings
+(`lib/fanout/index.js:83-107`) but merge emits nulls for deleted or absent blocks
+(`lib/model/model.js:1099-1129`), so the advertised delete-vs-edit conflict fails canonical
+output validation as `INVALID_TOOL_OUTPUT`. The deployment depth cap is ignored, and
+cancelling a tool call does not stop published children because the signal is observed only
+at creation. Requires WD-331, WD-332, WD-334.
+
+**D-8 — Merge application fails on insertions, tables and identity (W-09, W-10, W-11).**
+Insertion anchors are computed in pre-merge coordinates while deletions are applied first:
+an executed fake-engine case produced parent order `TWO,THREE,FOUR,FIVE,INSERT-A` instead of
+`…FOUR,INSERT-A,FIVE`, reported `applied:2`, and returned no conflict. A fork table change
+becomes `replace_paragraph` on a table ID and fails as `DOC_INVALID_OP` rather than a
+conflict; a fork-created table is flattened into a paragraph; fork list numbering is lost
+(`lib/model/model.js:1132-1191`; `lib/engine/host-bridge.js:365-397`). Table IDs are a hash
+of the header row, so identical tables share an ID; paragraph fallback IDs are
+session-scoped (`p:<session internal>`, `i:<index>`) when `w14:paraId` is absent — the
+114-table fixture has 0 of 1104 paraIds (`lib/engine/host-bridge.js:225-289`;
+`lib/engine/table-ids.mjs`). A duplicate-ID fork change silently applied to the first match
+or was invisible to `diff`. Requires WD-140, WD-141, WD-335, WD-336.
+
+**D-9 — Client identity, close and conflict handling are module-global (W-14, W-15, W-16).**
+Restored page tabs and no-param (guide) opens fall back to a module-global `lastPath` and
+`localStorage['workspace-editor.lastPath']`, so a reloaded or background tab can open the
+last document of another session (`lib/client.js:63-74,104-107`; client `persistence.ts:20`;
+`tab-domain.ts:105`). The close handler is registered once per kind and receives
+`(sessionId, tab)` but the plugin closes a module-global `currentDocId` (`lib/client.js:410-417`;
+client `service.ts:317-321`), so with two editor occurrences it can free another occurrence's
+document, after which that editor cannot save. An SSE conflict frame unmounts the editor
+iframe and shows a banner (`lib/client.js:214-217,251-255`); unsaved human work exists only
+in that iframe, so it is lost (consequence inferred from source). Requires WD-320, WD-321,
+WD-322, WD-323.
+
+**D-10 — No recovery path and verification cannot detect the failures (W-12, W-13).**
+The store renames over the document with no backup and no version history
+(`lib/docs.js:119-131,458-491`); model undo is working-state only, is lost on commit or
+rebase, and is exposed by no tool (`lib/model/model.js:751-777`). The existing verifiers pass
+while D-1 exists: the model verifier's "original removed" phrase is split across runs in the
+fixture so the check is vacuous, its merge assertion is presence-only, and the fake engine
+replaces text instead of producing a tracked delete plus insert
+(`lib/model/verify.mjs:79-98,195-215`; `test/fixtures.mjs:78-92`). There are no tests for the
+client bundle, host page/shim/boot, HTTP routes/SSE, store lease, engine host/manager RPC or
+real `ctx.subagents`. Requires WD-110, WD-112, I-12 and §19.
+
+### 16.3 Medium and low defects
+
+All are source-proven at `93fbb83`; each maps to a P1 or P2 gate in §19.
+
+| ID | Current behaviour | Severity |
+|---|---|---|
+| W-17 | Human save stale protection is optional: a base-less save overwrites the revision it refreshed; `modified` is page-self-reported, so the dirty lease rests on same-origin trust. | Medium |
+| W-18 | Agent `editor open`/`documents.open` registers a server session and broadcasts `reload:false`; the client acts only on `reload:true`, so the registry and visible tab diverge and no tab opens. | Medium |
+| W-19 | `editor` command vocabulary/ack mismatch: it dispatches `save`/`reload` and teaches snake_case review verbs (`accept_all`, `next_change`, `markup`) that the shim's camelCase executor rejects; `delivered` counts SSE connections, not execution, and the renderer shows `ok`. | Medium |
+| W-20 | `editor status` renders "engine stopped" until the sidecar is lazily spawned and can report stopped on the non-injected proxy path. | Low |
+| W-21 | File→Open/Ctrl+O is a no-op: `LocalFileOpen` only logs; its Ctrl+O caller (`editor-patches.js`) is not loaded, and the File menu's `editor:event` reaches an empty shim `execCommand`. | Low |
+| W-22 | Outline lists only paragraphs with a heading style or outline level; it was empty on the 18-block fixture, and the verifier's `Array.isArray(outline)` check cannot detect that. | Medium |
+| W-23 | Three revision semantics with no single contract: store SHA-256, model op counter reset on rebase, engine save counter with `baseRevision:0`; tool outputs mix numbers and hashes. | Medium |
+| W-24 | Session `contentHash` is never updated after rebase or commit, so `rehydrate(oldHash)` can re-find a stale session. | Low |
+| W-25 | Frame/host hardening: the visible editor iframe is same-origin with no `sandbox` and no CSP/nosniff, so the vendored UI has full same-origin access; the hidden window has `sandbox:false` with `'unsafe-eval'` CSP and no navigation/window-open guard (four IPC calls exposed). | Medium |
+| W-26 | Route hygiene: handlers do not restrict methods; malformed JSON returns 500 rather than 400; unknown fields are ignored. CSRF is mitigated by `SameSite=Strict` plus the Host/Origin fence. | Low |
+| W-27 | SSE exposes all open-document identities and paths to every authenticated same-origin subscriber, with no session scope. | Low |
+| W-28 | Sidecar cancellation is honoured only by `open`; `describe`, `apply` and `save` continue after abort or timeout (the README overstates this). | Medium |
+| W-29 | Sidecar reliability: the restart counter resets on each successful start, so the limit is ineffective after ready; a crash loses all engine sessions with no rebuild; run temp dirs are never removed; some error codes flatten to `ENGINE_PROTOCOL`. | Medium |
+| W-30 | The production `ctx.subprocess` spawn/termination path is exercised by no test (only Node `child_process`); renderer sandbox, CSP and navigation behaviour are untested live. | Medium |
+| W-31 | Version provenance: the default x2t is an unversioned Stage 5 binary, not the Lite-pinned `9.4.0.129`; the release-frontend override is unpinned and the version-match rule is unenforced. | Medium |
+| W-32 | Duplication: two x2t invocation stacks (host `x2t.js` and sidecar `main.js`) with different option sets; editor boot config duplicated; outline computation duplicated (`manager.js:115-129`; `model.js:113-127`). | Low |
+| W-33 | The `editorDocumentsStore` replacement seam is read and normalised but never provided or exercised in this checkout. | Low |
+| W-34 | The fan-out depth cap is a no-op: a child can call `doc_fanout` for grandchildren because the deployment `subagents.maxDepth` is ignored. | Medium |
+| W-35 | Tool-call cancellation does not stop published children: the signal is observed only at creation, so children keep editing forks. | Medium |
+| W-36 | Merged changes are re-applied as the parent author; the child/task attribution and the fork author are discarded. | Medium |
+| W-37 | Run-level formatting inside a replaced paragraph is lost (whole-range delete plus `AddText`); inserted paragraphs get no surrounding-context style inference. | Medium |
+| W-38 | No tracked find/replace or bulk edit on the `doc_*` surface; the only find/replace is `document_edit`'s single-run whole-file XML path, where a phrase split across runs fails. | Medium |
+| W-39 | Session lifecycle: no per-DSH-session cleanup of documents, engine sessions or leases; the model is disposed by two rows; `forkChildren` is never pruned. | Medium |
+| W-40 | Error codes are not surfaced structurally: engine codes flatten to model fallbacks, so recovery cannot branch on the code. | Medium |
+| W-41 | Runtime context leaks same-cwd documents to every agent in that cwd; the context order `130` is hard-coded instead of a named allocation. | Low |
+| W-42 | Review quality: the citation analyzer counts at most one valid citation per block (non-global regex), which produces false positives; analyzers are deterministic structural lint with no rule model, deal context, rule interaction, escalation or legal-judgment evaluation. | Low |
+| W-43 | The `legalReview` service has no consumer; the README claims `presentCall` on three tools (none exists), cancellation inside the sidecar and a 9.3.6 converter identity that are not supported. | Low |
+| W-44 | Test coverage is missing for the client bundle, host page/shim/boot, HTTP routes/SSE, store lease, engine host/manager RPC and real `ctx.subagents`; fan-out tests fake the provider; merge, table, insertion and conflict cases are not covered. | Medium |
+| W-45 | The selection quote records the file mtime as the "revision" when the content revision is unknown. | Low |
+| W-46 | `doc_state close` reports `closed:true` for an unknown handle; `editor open` without `path` reaches `path.resolve(undefined)` (a TypeError) instead of a typed argument error. | Low |
+
+### 16.4 Controls confirmed sound
+
+These are not defects and MUST be preserved by the corrections.
+
+| ID | Control | Source reference |
+|---|---|---|
+| W-C1 | Store write path: atomic same-directory temp plus rename, base-revision check before write, dirty-editor refusal, conversion before write so a failed commit writes nothing. | `lib/docs.js:106-131,384-448` |
+| W-C2 | Commit to visible editor reload: `reload:true` document frame on the shared SSE channel plus an mtime-poll fallback; the tab reloads only while clean and shows a banner while dirty. | `lib/docs.js:426-431`; `lib/client.js:171-232` |
+| W-C3 | Selection relay validation on both sides (source frame, same origin, type, string and coordinates); no cross-origin spoof path found. | `lib/boot.js:207-213`; `lib/client.js:147-169`; `lib/shim.js:249-256` |
+| W-C4 | Sidecar boundary: loopback RPC with a random token, POST-only, no document paths and no persistent document state; it writes only the temp root and a crash log. | `lib/engine/host/main.js:40-41,262-303,542-585`; `lib/engine/manager.js:560-565,696-722` |
+| W-C5 | Vendored Lite frontend provenance verified by execution: manifest equals checkout HEAD/submodules equals the staged tree; hash and file counts match. | `vendor/euro-office/manifest.json` |
+| W-C6 | Font/shaper readiness gate exercised; every executed engine open succeeded after `editor-app-ready` → `HB_StartString` → `document-ready`. | `lib/engine/host/main.js:424-431`; `lib/engine/host-bridge.js:56-64` |
+| W-C7 | The model never emits OOXML: edits go through builder APIs, and serialization is the engine's job. | `lib/model/model.js:55-74`; `lib/engine/host-bridge.js:362-531` |
+
+### 16.5 Verification baseline and blind spots
+
+Commands run at `93fbb83` and their recorded results:
+
+| Command | Result |
+|---|---|
+| `node --test "plugins/workspace-editor/test/*.test.mjs"` | 41 tests, 41 pass, 0 fail, exit 0 |
+| `node plugins/workspace-editor/lib/engine/verify.mjs --with-hooks` | `ok=true`, 33 checks, 0 failed, exit 0 |
+| `node plugins/workspace-editor/lib/model/verify.mjs` | `ok=true`, 40 checks, 0 failed, exit 0 |
+| `scripts/verify-word-open.ps1` on the engine artifact, marker `DBSPIKE-REPLACED-PARAGRAPH` | PASS; Word opened 29 paragraphs, 4 revisions, exit 0 |
+| `scripts/verify-word-open.ps1` on the model artifact, marker `DOCMODEL-WORD-CHECK` | PASS; Word opened 25 paragraphs, 3 revisions, exit 0 |
+
+First attempts of the Word-open sweep failed on relative paths (Word resolved them against
+its own working directory) and on a wrong marker (`DOCMODEL-REPLACED` instead of the final
+commit's `DOCMODEL-WORD-CHECK`); both failures were corrected. No real document was opened
+or written.
+
+Executed disposable-copy checks that exposed defects:
+
+| Check | Observed result |
+|---|---|
+| Merge on a clean fixture | Saved live text `024Dated: February 8, 2024CLEAN-MERGE-EXACT-TEXT`; `merged_live_text_exact=false`; merge `applied:1`, conflicts and failures empty; diff clean. |
+| Merge on a revision-bearing fixture | Live text `Respondent for the job. … MERGE-ADOPTED-EXACT-TEXT`; deleted text only a prefix; `old_text_absent_from_live=false`; merge `applied:1`, no conflict; diff clean. |
+| Direct write with a dirty editor | Write succeeded; file hash and store revision changed; dirty flag stayed true. |
+| Direct write on a revision-bearing copy | 4 insertions and 5 deletions dropped in the edited paragraph; document totals 19/14 → 15/9; package still valid. |
+| Commit lifecycle | `stale=true` immediately after `applied:true`; second commit refused `DOC_STALE_BASE`; reload then applied. |
+| Insertion after a deletion | Parent order `TWO,THREE,FOUR,FIVE,INSERT-A`; `applied:2`, no conflict. |
+| Duplicate-ID fork change | Merge `applied:0`; parent unchanged; duplicate insertion invisible to `diff`. |
+
+Why the passing suites do not disprove the defects: the model verifier's "original removed"
+phrase is split across runs in its fixture, its merge assertion only checks presence, and its
+fake engine replaces text instead of producing tracked delete and insert. The suites also do
+not cover the client, routes/SSE, store lease, engine host/manager RPC or real sub-agents.
+The acceptance tests in §19 MUST fail against this code before the fix and pass after it.
+
+### 16.6 Behaviours not verified
+
+Live editor terms: mount, tab switch and restore, save, conflict banner, selection menu and
+unsaved-buffer loss (source-inspected only; no dev app was run). Live route, header,
+Origin/CSRF and SSE delivery. Live tool, sub-agent and fan-out integration (no real
+`ctx.subagents` run). A real-engine conflict run (two forks on one block; delete versus
+edit); the schema failure is source-proven, not live. Sidecar live crash, restart, cancel,
+renderer sandbox and navigation, and the production `ctx.subprocess` path. Whether the
+builder can return text without revision marks; the representation fix depends on it. Word
+accept/reject through the EuroOffice review UI (Word only opened the artifacts).
+Cross-workspace and cross-drive writes (deliberately not repeated). x2t and
+release-frontend version identity (no readable version resource). Nextcloud endpoint,
+authentication and retention, and `insertPlainText` under tracked changes. Performance and
+memory with multiple open engine sessions.
 
 ---
 
-## 17. Conformance status (at `93fbb83`, after the audit)
+## 17. Conformance status
 
-| Requirement | Status | Evidence / gap |
+Status at `93fbb83`, after the corrections are specified. A **Gap** row names the defects in
+§16 that must be fixed; **Verified** means acceptance evidence exists; **Deferred** means a
+later release.
+
+| Requirement | Status | Evidence or gap |
 |---|---|---|
-| I-1, WD-100 single store writer | **Gap** | `document_edit` and `/api/save-as` write outside the store |
-| WD-101 remove `document_edit` | **Gap** | Tool registered unconditionally (`lib/index.js:562-624`) |
-| WD-102 engine.save target | **Gap** | API accepts a caller target; current usage stages |
-| WD-103 save-as policy | **Gap** | Arbitrary absolute target |
-| WD-105..109 lease | Partial | Lease exists; base-less save accepted; dirty self-reported |
-| WD-130..135 commit lifecycle | **Gap** | Executed self-stale loop; contentHash not updated |
-| WD-140..142 stable IDs | **Gap** | Session-local fallbacks; duplicate table IDs |
-| WD-143 document identity | **Gap** | Client uses module-global `lastPath` |
-| WD-300..309 OOXML view | **Gap** | Absent; plain block text includes deleted runs |
-| WD-310..314 tools and review | Partial | `presentCall` absent; command vocabulary mismatch; accept/reject unlogged |
-| WD-320..326 multi-document | **Gap** | Single page tab; global identity; close ignores `(sessionId, tab)` |
-| WD-330..338 parallel | **Gap** | Merge corruption; conflict schema; child scoping; depth/cancel |
-| WD-120..126 scope and security | **Gap** | No confinement; iframe without sandbox/CSP |
-| WD-110..113 backups/history | **Gap** | No backup or undo tool |
-| WD-140a..143a lifecycle | **Gap** | Activation-global state; no per-session cleanup |
+| I-1, WD-100 single store writer | **Gap** | `document_edit` and save-as write outside the store (D-2, D-5) |
+| WD-101 remove `document_edit` | **Gap** | Tool registered unconditionally (D-2) |
+| WD-102 engine save target | **Gap** | API accepts a caller target; current usage stages only |
+| WD-103 save-as policy | **Gap** | Arbitrary absolute target and bytes (D-5) |
+| WD-105..109 lease | Partial | Lease exists; base-less save accepted; dirty self-reported (W-17) |
+| WD-130..135 commit lifecycle | **Gap** | Executed self-stale loop (D-4) |
+| WD-140..142 stable IDs | **Gap** | Session-local fallbacks; duplicate table IDs (D-8) |
+| WD-143 document identity | **Gap** | Client uses module-global `lastPath` (D-9) |
+| WD-300..309 OOXML view | **Gap** | Absent; plain block text includes deleted runs (D-1, D-3) |
+| WD-310..314 tools and review | Partial | `presentCall` absent; command vocabulary mismatch; accept/reject unlogged (W-19, W-43) |
+| WD-320..326 multi-document | **Gap** | Single page tab; global identity; close ignores `(sessionId, tab)` (D-9) |
+| WD-330..338 parallel | **Gap** | Merge corruption; conflict schema; child scoping; depth and cancellation (D-1, D-7, D-8) |
+| WD-120..126 scope and security | **Gap** | No confinement; iframe without sandbox or CSP (D-5, D-6, W-25) |
+| WD-110..113 backups/history | **Gap** | No backup or undo tool (D-10) |
+| WD-140a..143a lifecycle | **Gap** | Activation-global state; no per-session cleanup (D-6, W-39) |
 | WD-150..151 performance | **Deferred** | No budgets yet |
-| Verifiers: unit 41/41, engine 33/33, model 40/40, Word-open PASS | **Verified** | But cannot detect merge corruption (audit C-9) |
-
-Full finding IDs and line evidence: final audit report §3 and Appendix A.
+| Verification suites (41/41, 33/33, 40/40, Word-open PASS) | **Verified** | Passing, but cannot detect D-1 (D-10) |
 
 ---
 
@@ -544,7 +745,8 @@ Kept for a later release, documented and not silently dropped:
 - Nextcloud Assistant integration (present and dormant in the vendored frontend; would need
   a host bridge and must use the store path).
 - Splitting `doc_fanout` into a separate package from the generic workflow tool.
-- The end-of-session edit generator (the merge fix is in this specification; the generator is a later refactor).
+- The end-of-session edit generator (the merge fix is in this specification; the generator
+  is a later refactor).
 - Real-time co-editing (permanent non-goal).
 
 ---
@@ -553,13 +755,13 @@ Kept for a later release, documented and not silently dropped:
 
 **P0 (blocks adoption).** WD-100/101/102/103; WD-105..109; WD-130..135; WD-140..142;
 WD-120..121; WD-320..325; WD-333..337; WD-110..112; and the exact-text tests in §8.4.
-Evidence: unit tests that fail before the fix, the engine/model verifiers, and a live
+Evidence: unit tests that fail before the fix, the engine and model verifiers, and a live
 dev-profile run for the client and review flows.
 
 **P1.** WD-330..332 child enforcement and cancellation; WD-143a lifecycle; WD-310..314 tool
 and review contract; WD-150 budgets.
 
-**P2.** Remaining medium/low findings from the audit and the deferred list in §18.
+**P2.** The medium and low defects in §16.3 and the deferred list in §18.
 
 **Adoption rule.** The component remains **REVISE** until P0 passes exact-text and
 confinement acceptance tests and one live profile run. It may then be **ADOPT WITH
@@ -568,12 +770,69 @@ parallel editing is trusted.
 
 ---
 
-## 20. References
+## 20. Design rationale and technology assessment
 
-- Final audit report: [../scratch/testingdocs/workspace-editor-final-audit-report.md](../scratch/testingdocs/workspace-editor-final-audit-report.md)
-- First report (detailed ledger): [../scratch/testingdocs/workspace-editor-audit-and-improvement-report.md](../scratch/testingdocs/workspace-editor-audit-and-improvement-report.md)
-- Cordis map: [cordis-map.md](cordis-map.md)
+**Why the sidecar exists.** The hidden Electron sidecar is the only component that supplies
+the official sdkjs Document Builder headlessly: structural queries, tracked changes and
+deterministic serialization of DOCX through `Editor.bin`. It runs offline, isolates crashes
+from the plugin process, and holds no persistent document state; its writes are limited to a
+manager-provided temp root. It costs one renderer per open document and needs hardening
+(cancellation, restart limit, temp cleanup), but replacing it would remove the capability
+the plugin is built on. The builder (D1) is therefore chosen; the own-model fallback (D2) is
+deferred.
+
+**Position against the Harvey pattern.** The plugin follows the revised in-memory
+document-agent pattern on the parts that matter: an immutable base plus a mutable working
+copy, deterministic ops, isolated forks, and focused tools. It is only half-transplanted:
+edits are still paragraph-granular over flat block text, there is no end-of-session edit
+generator, and the multi-agent review half is absent. The OOXML view (§8) closes the
+representation gap; the edit generator is deferred (§18).
+
+**Vendored editor provenance.** The Lite frontend at `resources/euro-office` is pinned:
+manifest equals the checkout HEAD and submodules and equals the staged tree, the file count
+is 5,907 and the size 227,375,696 bytes, and the served `index.html` hash matches the
+manifest. The release-frontend override is optional but currently unpinned and its
+version-match rule is unenforced (W-31). The default x2t converter is an unversioned Stage 5
+binary rather than the Lite-pinned `9.4.0.129` (W-31).
+
+**Nextcloud Assistant.** The assistant surface exists in the vendored frontend and is
+dormant here. The host never answers `setAssistantAvailable` or `onRequestSmartPicker`,
+there is no result message, and the generic `insertPlainText` path is unused. Any future
+integration stays buffer-only, writes through the normal save and lease path, and must not
+become a second write authority. It is deferred (§18).
+
+**Framework mapping.** The row contracts match the pinned framework: function-plugin forms,
+required and optional injection, `ctx.provide` inside `ctx.effect`, disposer-returning
+registries, one event seam for lease facts, `ToolDefinition`s and the pinned sub-agent
+activation API. Runtime unload and HMR behaviour is not exercised; treat the mapping as
+source-conformant, not runtime-verified.
+
+---
+
+## 21. Owner decisions recorded
+
+1. This is one normative specification, not a set of documents; it is self-contained.
+2. OOXML view: core markup coverage; curated structural ops only; no raw XML writes; agent
+   edits, human read-only inspector. Vendored editor unmodified.
+3. `document_edit` is removed. Public agent-surface change; approved here.
+4. Paths confined to the session workspace; session-scoped registries; the file lease is the
+   only cross-session state.
+5. Backups plus a versioned store adapter; `doc_undo` exposed.
+6. Merge: representation fix, derivation checks and deterministic conflicts now; the
+   end-of-session edit generator is deferred.
+7. Stable IDs minted and persisted; table and list merge included.
+8. Review authority: human default; the agent may accept or reject only on explicit
+   instruction, logged.
+9. Multi-document: resource-address tabs; per-workspace view and document identity.
+10. This specification keeps table and list merge, stable IDs and the live browser end-to-end
+    gate. The remaining deferred items are listed in §18.
+
+---
+
+## 22. References
+
+- Cordis plugin map: [cordis-map.md](cordis-map.md)
 - DSH upstream map: [deepseek-harness-map.md](deepseek-harness-map.md)
-- Plugin guide: [plugin-knowledge-base.md](plugin-knowledge-base.md)
-- Hosting decision: [eurooffice-hosting-assessment.md](eurooffice-hosting-assessment.md)
+- Plugin workspace guide: [plugin-knowledge-base.md](plugin-knowledge-base.md)
+- Hosting and vendoring decision: [eurooffice-hosting-assessment.md](eurooffice-hosting-assessment.md)
 - Plugin contract: [../plugins/workspace-editor/README.md](../plugins/workspace-editor/README.md)

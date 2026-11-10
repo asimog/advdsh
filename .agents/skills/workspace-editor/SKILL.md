@@ -7,15 +7,15 @@ description: Use when working on plugins/workspace-editor, the legal DOCX editor
 
 The plugin is one bundle with six Cordis rows. Contract:
 [plugins/workspace-editor/README.md](../../../plugins/workspace-editor/README.md).
-Specification (requirements, invariants, acceptance gates):
-[legal-docx-workspace.md](../../../docs/legal-docx-workspace.md). Audit and open defects:
-[workspace-editor-audit-and-improvement-report.md](../../../scratch/testingdocs/workspace-editor-final-audit-report.md).
+Specification (requirements, invariants, known defects, evidence, acceptance gates):
+[legal-docx-workspace.md](../../../docs/legal-docx-workspace.md). The specification's §16
+lists the current defects; §19 lists the gates.
 
 ## Rows
 
 | Row | Module | Owns |
 |---|---|---|
-| `workspace-editor` | `lib/index.js` | EuroOffice host, routes/SSE, document store and lease, right-dock tab, `editor` tool, legacy `document_edit` |
+| `workspace-editor` | `lib/index.js` | EuroOffice host, routes/SSE, document store and lease, right-dock tab, `editor` tool, legacy `document_edit` (to be removed) |
 | `workspace-docx-engine` | `lib/engine/index.js` | Hidden Electron Document Builder sidecar (`docxEngine`) |
 | `workspace-docx-model` | `lib/model/index.js` | Sessions, op log, diff/check, fork/merge/commit (`docxModel`) |
 | `workspace-docx-tools` | `lib/tools/index.js` | `doc_*` tools, runtime context, write gate |
@@ -48,7 +48,7 @@ Specification (requirements, invariants, acceptance gates):
 | Tools or client surfaces | `node --test "plugins/workspace-editor/test/*.test.mjs"`, then a real dev-profile run |
 | Formatting/merge fidelity | Exact-text assertions on disposable copies, not marker counts |
 
-## Open defects (from the 2026-11-10 audit; do not assume fixed)
+## Open defects (listed in the specification §16; do not assume fixed)
 
 Merge adopts contaminated block text and can corrupt live text while reporting success; the
 `document_edit` tool is an ungated direct write that destroys tracked changes; a successful

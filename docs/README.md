@@ -9,7 +9,7 @@ whole folder. Records (logs, prompts, skills, trash) live in `.agents/`.
 | [cordis-map.md](cordis-map.md) | How Cordis works in DSH: context, services, events, lifecycle, loader | Working on plugin composition or APIs |
 | [deepseek-harness-map.md](deepseek-harness-map.md) | Upstream DSH repository map and where to look | Reading or verifying DSH source |
 | [plugin-knowledge-base.md](plugin-knowledge-base.md) | Building, composing, testing and publishing a DSH plugin | Authoring or changing a plugin |
-| [legal-docx-workspace.md](legal-docx-workspace.md) | Normative specification (revision 2) of the legal DOCX workspace: requirements, invariants, OOXML view, acceptance gates | Working on `plugins/workspace-editor` or changing its design |
+| [legal-docx-workspace.md](legal-docx-workspace.md) | Normative specification (revision 3) of the legal DOCX workspace: requirements, invariants, OOXML view, current defects, verified controls, acceptance gates | Working on `plugins/workspace-editor` or changing its design |
 | [eurooffice-hosting-assessment.md](eurooffice-hosting-assessment.md) | EuroOffice / EuroOfficeLite hosting decision | Vendoring or changing the editor frontend |
 
 ## Reading order
