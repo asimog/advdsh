@@ -204,9 +204,11 @@
     } catch (error) {}
     if (kind === 'paragraph') {
       try { info.paraId = element.GetParaId() || null } catch (error) {}
-      info.id = internalId !== null && internalId !== undefined
-        ? 'p:' + internalId
-        : (info.paraId ? 'w14:' + info.paraId : 'i:' + index)
+      // `w14:paraId` is the stable identity the design asks for: it survives a
+      // save/reopen round trip, unlike sdkjs's session-scoped internal id.
+      info.id = info.paraId
+        ? 'w14:' + info.paraId
+        : (internalId !== null && internalId !== undefined ? 'p:' + internalId : 'i:' + index)
       try { info.text = element.GetText({ Numbering: false, Math: false }) } catch (error) { info.text = '' }
       try {
         const pr = element.GetParaPr()

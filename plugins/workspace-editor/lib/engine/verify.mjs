@@ -214,7 +214,12 @@ async function main() {
     // --- reopen the saved DOCX ----------------------------------------------
     const reopened = await engine.open({ path: OUT_DOCX }, { author: AUTHOR })
     const reopenedDescription = await engine.describe(reopened.sessionId)
-    check('reopen_saved_docx', reopenedDescription.blocks.some((block) => block.text.includes('DBSPIKE-REPLACED-PARAGRAPH')))
+    const reopenedTarget = reopenedDescription.blocks.find((block) => block.text.includes('DBSPIKE-REPLACED-PARAGRAPH'))
+    check('reopen_saved_docx', reopenedTarget !== undefined)
+    facts.reopenTarget = reopenedTarget === undefined
+      ? null
+      : { id: reopenedTarget.id, paraId: reopenedTarget.paraId, baseId: target.id, baseParaId: target.paraId }
+    check('reopen_ids_stable', reopenedTarget !== undefined && reopenedTarget.id === target.id, facts.reopenTarget)
     await engine.close(reopened.sessionId)
     await engine.close(opened.sessionId)
     check('close_idempotent', (await engine.close(opened.sessionId)).closed === true)
