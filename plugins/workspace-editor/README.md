@@ -103,6 +103,61 @@ the official sdkjs Word Document Builder from the vendored Lite tree
   crash/restart, sidecar-survives-cancel and awaited exit. It writes
   `lib/engine/out/verification.json` and exits non-zero on a failed check.
 
+## Model half (`lib/model/`, row `workspace-docx-model`)
+
+The model row provides **`ctx.docxModel`**, the per-activation document session
+service the agent tools use. Sessions are keyed by absolute path + SHA-256
+content hash; re-opening the same bytes reuses the handle, and a changed file
+mints a new one.
+
+- **Surface.** `open`, `describe`, `read`, `search`, `context` (as read modes),
+  `edit`, `undo`, `diff`, `check`, `revisions`, `commit`, `reload`, `close`,
+  `rehydrate`, `status`, `statusLines`, plus lease notes from editor events.
+- **Stable targets.** Edits target a block id (`w14:paraId` when the block has
+  one, else a session id) or index, carry the expected text, and fail with
+  `DOC_STALE_TARGET` when the block changed. One op per call; the op log keeps
+  the inverse for `undo`.
+- **Read budget.** A full read is allowed only under `DOC_FULL_READ_TOKENS`
+  (default 20,000) and `DOC_FULL_READ_PARAGRAPHS` (default 400); above that the
+  model reports `DOC_TOO_LARGE` and the agent uses outline, range, search or
+  context.
+- **Lease and commit.** One lease per path. `commit` serializes through the
+  engine, re-reads the editor document, and refuses a dirty editor
+  (`DOC_EDITOR_DIRTY`) or a base revision that moved (`DOC_STALE_BASE`) before
+  writing anything. The write goes through `editorDocuments.applyBytes`, so the
+  open tab reloads from it; after a commit the engine session rebases on the new
+  bytes and the change set is empty.
+- **Write gate.** `WORKSPACE_DOCX_WRITE=off` disables edits and commits with
+  `DOC_WRITE_DISABLED`; the tools row also omits `doc_edit`/`doc_commit`.
+- **Verification.** `node lib/model/verify.mjs` runs the model over the real
+  engine and document store: reads, tracked replace + list item, diff, check,
+  commit, OOXML markers/author, reload, dirty and stale refusals. It writes
+  `lib/model/out/verification.json` and exits non-zero on a failed check.
+
+## Tool half (`lib/tools/`, row `workspace-docx-tools`)
+
+The tools row registers the model-facing `doc_*` tools, the runtime context and
+the write gate:
+
+| Tool | Purpose |
+|---|---|
+| `doc_open` | Open a path into a session; returns handle, content hash, revision, read mode and outline. |
+| `doc_read` | Read in `auto`/`full`/`outline`/`range`/`search`/`context` mode as annotated `[blockId] text`. |
+| `doc_search` | Phrase search with block ids and snippets. |
+| `doc_edit` (gated) | One atomic tracked op: paragraph replace/insert/delete, list item, table row insert/delete. |
+| `doc_diff` | Working document against its base revision, with block ids. |
+| `doc_check` | Uncommitted changes plus registered analyzer findings with stable codes. |
+| `doc_commit` (gated) | Serialize and write through the store under the lease's base check. |
+| `doc_state` | `status`, `revisions`, `reload`, `close`. |
+| `editor` | Editor session control only: `status`, `open`, `save`, `reload`, `export_pdf`, `wait`, `review` commands. |
+
+`doc_edit`, `doc_diff` and `doc_commit` carry replayable `presentCall`/
+`presentResult` diff cards projected from persisted result metadata. Runtime
+context `document-model:open` (order 130) lists one line per open agent document
+under the agent's cwd: handle, path, revision, base, block count, read mode,
+editor state and pending ops. Unloading the row removes every tool and the
+context through the registration effects.
+
 ## Client half (`lib/client.js`)
 
 - Tab type `workspace-editor` with `keepMounted: true`, body registered in
@@ -130,9 +185,9 @@ One package inserts several Cordis rows, one `engines.dsh` and one gate:
 | `workspace-docx-fanout` | `lib/fanout/index.js` | parallel editing over sub-agents |
 | `workspace-legal-review` | `lib/review/index.js` | legal analyzers and review skill |
 
-The engine row is implemented; the model, tools, fan-out and review rows are
-placeholders in this version. They load so the patch and package exports are
-stable.
+The engine, model and tools rows are implemented; the fan-out and legal-review
+rows are placeholders in this version. They load so the patch and package exports
+are stable.
 
 ## Deviations and known gaps
 
@@ -147,12 +202,13 @@ stable.
 - The vendored Lite frontend compiles LESS at runtime, so the first open is
   slower than the release build. Set `WORKSPACE_EDITOR_FRONTEND` to the
   release editors path for a version-matched performance run.
-- The engine row provides `ctx.docxEngine`, but the `doc_*` agent tools, the
-  document model, fan-out and legal review are still placeholders;
-  `document_edit` remains the only agent edit path.
+- The fan-out and legal-review rows are still placeholders; the engine, model and
+  `doc_*` tools are live, and `document_edit` remains the simple whole-file agent
+  path.
 - The engine sidecar's DOCX round trip is verified on the fixture, including
-  tracked `w:ins`/`w:del` with the agent author. A Word-open sweep and a
-  duplicate-`w:id`/`paraId` fidelity sweep are not part of the harness yet.
+  tracked `w:ins`/`w:del` with the agent author and `w14:paraId` stability across
+  a save/reopen. A Word-open sweep and a duplicate-`w:id` fidelity sweep are not
+  part of the harness yet.
 - After a restart the tab restores the last document path (stored in
   localStorage); it does not re-open unsaved work.
 
@@ -162,11 +218,14 @@ Stage 5 must have run `scripts/stage5/setup-x2t.ps1` first (converter, editors,
 font cache). Then reload the dev Desktop; the plugin is already linked into the
 isolated profile.
 
-Check the engine without the app:
+Check the engine and the model without the app:
 
 ```powershell
 node plugins/workspace-editor/lib/engine/verify.mjs --with-hooks
+node plugins/workspace-editor/lib/model/verify.mjs
+node --test "plugins/workspace-editor/test/*.test.mjs"
 ```
 
-It needs the vendored frontend, x2t and an Electron binary (it falls back to
-`process.execPath` inside Electron, otherwise `spike/editor-host`'s Electron).
+The verifiers need the vendored frontend, x2t and an Electron binary (they fall
+back to `process.execPath` inside Electron, otherwise `spike/editor-host`'s
+Electron).

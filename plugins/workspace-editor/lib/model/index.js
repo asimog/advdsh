@@ -1,13 +1,51 @@
 /**
- * `workspace-docx-model` row: sessions, stable block IDs, forks, merge, lease and commit.
+ * `workspace-docx-model` row: register `ctx.docxModel`, the per-activation
+ * document session service the agent tools consume.
  *
- * Placeholder row. It registers no service, tool or listener yet, so the bundle
- * patch can insert it and the module can load before the implementation lands.
- * The service contract it will fill is `ctx.docxModel` in
- * `.agents/docs/legal-docx-workspace.md`.
+ * The row owns nothing itself: the model holds process-local sessions and
+ * disposes them with the fiber. Lease facts arrive from the editor host's
+ * `editor-documents/*` events, so a human save marks agent sessions stale
+ * before the next commit can race it.
  */
+import { createDocxModel } from './model.js'
 
 export const name = 'workspace-docx-model'
+export const inject = ['docxEngine', 'editorDocuments']
 
-/** No contribution yet: this row only proves the module resolves in the bundle patch. */
-export function apply() {}
+/**
+ * Provide the document model and keep its sessions tied to the plugin fiber.
+ * @param {import('@deepseek-ai/cordis').Context} ctx - the row's Cordis context.
+ */
+export function apply(ctx) {
+  const writeEnabled = process.env.WORKSPACE_DOCX_WRITE !== 'off'
+  const model = createDocxModel({
+    engine: ctx.docxEngine,
+    documents: ctx.editorDocuments,
+    writeEnabled: writeEnabled,
+    log: (level, message, data) => {
+      console.error(`[workspace-docx-model] ${message}${data === undefined ? '' : ` ${safeJson(data)}`}`)
+      void level
+    },
+  })
+
+  ctx.effect(() => ctx.provide('docxModel', model), 'workspace-docx-model.service')
+  ctx.effect(() => () => model.dispose(), 'workspace-docx-model.dispose')
+
+  ctx.on('editor-documents/saved', (payload) => {
+    if (payload && typeof payload.path === 'string' && typeof payload.revision === 'string') {
+      model.noteSaved(payload.path, payload.revision)
+    }
+  })
+  ctx.on('editor-documents/conflict', (payload) => {
+    if (payload && typeof payload.path === 'string') model.noteConflict(payload.path, payload.code)
+  })
+}
+
+/** @param {unknown} value - log payload. @returns {string} */
+function safeJson(value) {
+  try {
+    return JSON.stringify(value)
+  } catch (error) {
+    return String(value)
+  }
+}

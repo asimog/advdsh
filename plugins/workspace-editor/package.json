@@ -17,10 +17,10 @@
   },
   "files": [
     "lib/index.js",
-    "lib/model/index.js",
-    "lib/tools/index.js",
-    "lib/fanout/index.js",
-    "lib/review/index.js",
+    "lib/model/**",
+    "lib/tools/**",
+    "lib/fanout/**",
+    "lib/review/**",
     "lib/x2t.js",
     "lib/docs.js",
     "lib/docs-edit.js",
@@ -32,6 +32,10 @@
     "README.md",
     "lib/engine/**"
   ],
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "verify:model": "node lib/model/verify.mjs"
+  },
   "engines": {
     "dsh": ">=0.2.0 <0.3.0"
   },
