@@ -20,13 +20,14 @@ async function call(base, route, init) {
 /** @param {string} root - workspace root. @param {object} model - docx model service. */
 function createHost(root, model) {
   const routes = []
+  const provided = {}
   const ctx = {
     get(name) {
       if (name === 'docxModel') return model
       if (name === 'workspaceRoot') return root
       return undefined
     },
-    provide() { return () => {} },
+    provide(name, value) { provided[name] = value; return () => {} },
     effect(fn) { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose() } },
     emit() {},
     on() {},
@@ -48,7 +49,7 @@ function createHost(root, model) {
       res.end(JSON.stringify({ error: String(error), code: 'TEST' }))
     })
   })
-  return { server, routes }
+  return { server, routes, provided }
 }
 
 test('document routes refuse a path outside the workspace and a foreign session (WD-080, WD-086)', async (t) => {
@@ -169,7 +170,7 @@ test('editor open queues one pending tab request for its session (WD-065)', asyn
   await writeFile(file, 'A')
   const { model } = createModel()
   await model.open(file, { sessionId: 'S1', cwd: root })
-  const { server } = createHost(root, model)
+  const { server, provided } = createHost(root, model)
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise((resolve) => server.close(resolve)))
   const origin = `http://127.0.0.1:${server.address().port}`
@@ -184,4 +185,47 @@ test('editor open queues one pending tab request for its session (WD-065)', asyn
   const body = await pending.json()
   assert.equal(body.paths.length, 0, 'route open is not an editor-tool open')
   assert.equal((await (await call(origin, '/workspace-editor/api/pending-open?session=S1')).json()).paths.length, 0)
+
+  // The editor tool's request survives a read: only the client's confirmation
+  // releases it, so no request is dropped before its tab exists.
+  const documents = provided.editorDocuments
+  assert.deepEqual(documents.requestOpen('S1', file), { queued: true })
+  assert.deepEqual((await (await call(origin, '/workspace-editor/api/pending-open?session=S1')).json()).paths, [file])
+  assert.deepEqual((await (await call(origin, '/workspace-editor/api/pending-open?session=S1')).json()).paths, [file])
+  // The tab body opens the document through the route; the session root comes
+  // from the store's open, because `editor open` makes no model session.
+  const openedByTab = await call(origin, '/workspace-editor/api/open?session=S1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: file }),
+  })
+  assert.equal(openedByTab.status, 200)
+  assert.equal((await openedByTab.json()).path, await (await import('node:fs/promises')).realpath(file))
+  const ack = await call(origin, '/workspace-editor/api/pending-open-ack?session=S1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paths: [file] }),
+  })
+  assert.equal(ack.status, 200)
+  assert.deepEqual(await ack.json(), { acked: 1 })
+  assert.deepEqual((await (await call(origin, '/workspace-editor/api/pending-open?session=S1')).json()).paths, [])
+  const other = await call(origin, '/workspace-editor/api/pending-open-ack?session=S1')
+  assert.equal(other.status, 405)
+  assert.equal(other.headers.get('allow'), 'POST')
+
+  // `editor open` creates no model session, so the tab body's /api/open takes
+  // the workspace root from the store's own open of that DSH session.
+  const { realpath } = await import('node:fs/promises')
+  const second = path.join(root, 'b.pdf')
+  await writeFile(second, 'B')
+  await documents.open(second, { cwd: root, sessionId: 'S3' })
+  assert.deepEqual(documents.requestOpen('S3', second), { queued: true })
+  const tabOpen = await call(origin, '/workspace-editor/api/open?session=S3', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: second }),
+  })
+  assert.equal(tabOpen.status, 200)
+  assert.equal((await tabOpen.json()).path, await realpath(second))
+  assert.deepEqual((await (await call(origin, '/workspace-editor/api/pending-open?session=S3')).json()).paths, [second])
 })

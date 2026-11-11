@@ -58,3 +58,31 @@ test('no plugin source file starts with a byte-order mark', async () => {
   await walk(root)
   assert.deepEqual(marked, [])
 })
+
+test('no plugin source file holds text that was decoded with the wrong encoding', async () => {
+  const { readdir, readFile } = await import('node:fs/promises')
+  const nodePath = await import('node:path')
+  const root = nodePath.resolve(import.meta.dirname, '..')
+  // UTF-8 punctuation read as Windows-1252: an ellipsis becomes one character
+  // from E2 80 A6 decoded byte by byte; a two-byte letter such as e-acute
+  // becomes a Cyrillic-looking A-tilde pair. The pattern is built from code
+  // points so this file does not itself hold the damaged text.
+  const misread = new RegExp('\u00E2\u20AC|\u00C3[\u0080-\u00BF]|\u00C2\u00A0')
+  const damaged = []
+  async function walk(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === 'out') continue
+      const file = nodePath.join(directory, entry.name)
+      if (entry.isDirectory()) { await walk(file); continue }
+      if (!/\.(js|cjs|mjs|json|md|yml|html)$/.test(entry.name)) continue
+      const text = await readFile(file, 'utf8')
+      const match = misread.exec(text)
+      if (match !== null) {
+        const line = text.slice(0, match.index).split('\n').length
+        damaged.push(`${nodePath.relative(root, file)}:${line}: ${JSON.stringify(match[0])}`)
+      }
+    }
+  }
+  await walk(root)
+  assert.deepEqual(damaged, [], 'text decoded with the wrong encoding (a damaged ellipsis or accented letter)')
+})

@@ -207,6 +207,7 @@ export function apply(ctx) {
       const owned = model.status(undefined, sessionId).some((session) => path.resolve(session.path).toLowerCase() === key)
       if (owned) return true
     }
+    if (typeof docs.owns === 'function') return docs.owns(sessionId, file)
     return docs.list().some((document) => document.ownerSessionId === sessionId && path.resolve(document.path).toLowerCase() === key)
   }
 
@@ -294,6 +295,24 @@ export function apply(ctx) {
    */
   /** Pending editor-open requests per DSH session. */
   const pendingOpens = new Map()
+
+  /**
+   * Keep a tab request until the client confirms it opened that tab, so a
+   * request is never dropped before its tab exists.
+   * @param {string} sessionId - calling DSH session.
+   * @param {string[]} paths - document paths the client opened.
+   * @returns {{ acked: number }} how many requests the confirmation released.
+   */
+  function acknowledgeOpen(sessionId, paths) {
+    if (typeof sessionId !== 'string' || sessionId === '' || !Array.isArray(paths)) return { acked: 0 }
+    const wanted = new Set(paths.filter((entry) => typeof entry === 'string'))
+    const list = pendingOpens.get(sessionId) ?? []
+    const left = list.filter((entry) => !wanted.has(entry))
+    const acked = list.length - left.length
+    if (left.length === 0) pendingOpens.delete(sessionId)
+    else pendingOpens.set(sessionId, left)
+    return { acked }
+  }
   /** Command request ids waiting for a host-page acknowledgement. */
   const commandWaiters = new Map()
   function dispatchCommand(request) {
@@ -344,11 +363,25 @@ export function apply(ctx) {
       pendingOpens.set(sessionId, list)
       return { queued: true }
     },
+    /** @param {string} sessionId - DSH session. @returns {string[]} paths a client still has to open. */
+    pendingOpen: (sessionId) => (typeof sessionId === 'string' ? [...(pendingOpens.get(sessionId) ?? [])] : []),
+    /** @param {string} sessionId - DSH session. @param {string[]} paths - paths the client opened. */
+    ackOpen: (sessionId, paths) => acknowledgeOpen(sessionId, paths),
   }
   ctx.effect(() => ctx.provide('editorDocuments', editorDocuments), 'workspace-editor.editorDocuments')
 
   /** Routes that mutate state; every other route is read-only. */
-  const POST_ROUTES = new Set(['/api/open', '/api/save', '/api/save-as', '/api/close', '/api/editor', '/api/command'])
+  const POST_ROUTES = new Set([
+    '/api/open',
+    '/api/save',
+    '/api/save-as',
+    '/api/close',
+    '/api/editor',
+    '/api/modified',
+    '/api/log',
+    '/api/command',
+    '/api/pending-open-ack',
+  ])
   /** Register one route behind the trust fence. */
   const serve = (kind, suffix, handler) => ctx.effect(
     () => ctx.webServer.register({
@@ -358,6 +391,7 @@ export function apply(ctx) {
         if (rejected(req, res)) return
         const post = POST_ROUTES.has(suffix)
         if ((post && req.method !== 'POST') || (!post && req.method !== 'GET' && req.method !== 'HEAD')) {
+          res.setHeader('allow', post ? 'POST' : 'GET, HEAD')
           sendJson(res, 405, { error: 'method not allowed', code: ERROR_CODES.INVALID_ARGS })
           return
         }
@@ -432,7 +466,12 @@ export function apply(ctx) {
         })
         res.write(': connected\n\n')
         const sessionId = sessionIdFromRequest(req)
-        res.write(sseData({ type: 'snapshot', documents: docs.list().filter((document) => sessionId === undefined || !document.ownerSessionId || document.ownerSessionId === sessionId) }))
+        res.write(sseData({
+          type: 'snapshot',
+          documents: docs.list().filter((document) => sessionId === undefined
+            || document.ownerSessionId === ''
+            || ownsPath(sessionId, document.path)),
+        }))
         connections.set(res, sessionId)
         const heartbeat = setInterval(() => {
           try {
@@ -461,9 +500,12 @@ export function apply(ctx) {
   function sessionCwd(sessionId) {
     if (sessionId === undefined) return undefined
     const model = ctx.get('docxModel')
-    if (model === undefined || typeof model.status !== 'function') return undefined
-    const row = model.status(undefined, sessionId)[0]
-    return row && typeof row.cwd === 'string' && row.cwd !== '' ? row.cwd : undefined
+    if (model !== undefined && typeof model.status === 'function') {
+      const row = model.status(undefined, sessionId)[0]
+      if (row && typeof row.cwd === 'string' && row.cwd !== '') return row.cwd
+    }
+    const root = typeof docs.sessionRoot === 'function' ? docs.sessionRoot(sessionId) : undefined
+    return typeof root === 'string' && root !== '' ? root : undefined
   }
 
   /** Refuse a document id that does not belong to the request's DSH session. */
@@ -479,14 +521,25 @@ export function apply(ctx) {
     if (session && typeof session.id === 'string') void docs.closeOwner(session.id)
   })
 
-  /** Pending editor-open requests for one DSH session; consumed by the client. */
+  /** Pending editor-open requests for one DSH session; read-only, kept until the client confirms. */
   serve('exact', '/api/pending-open', async (req, res) => {
     try {
       const sessionId = sessionIdFromRequest(req)
       if (sessionId === undefined) throw new DocError('session is required', { status: 400, code: ERROR_CODES.INVALID_ARGS })
-      const paths = pendingOpens.get(sessionId) ?? []
-      pendingOpens.delete(sessionId)
-      sendJson(res, 200, { paths })
+      sendJson(res, 200, { paths: [...(pendingOpens.get(sessionId) ?? [])] })
+    } catch (error) {
+      fail(res, error)
+    }
+  })
+  /** The client confirms that it opened the tab of a pending request. */
+  serve('exact', '/api/pending-open-ack', async (req, res) => {
+    try {
+      const sessionId = sessionIdFromRequest(req)
+      if (sessionId === undefined) throw new DocError('session is required', { status: 400, code: ERROR_CODES.INVALID_ARGS })
+      const body = await readJsonBody(req)
+      rejectUnknown(body, ['paths'])
+      if (!Array.isArray(body.paths)) throw new DocError('paths is required', { status: 400, code: ERROR_CODES.INVALID_ARGS })
+      sendJson(res, 200, acknowledgeOpen(sessionId, body.paths))
     } catch (error) {
       fail(res, error)
     }

@@ -310,11 +310,35 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       const t = ctx.locale.bind(NAMESPACE)
+      /** Open a document tab in the session that is on screen (the Edit action). */
       const openEditor = (path) => {
         try {
           ctx.sidebarRight.openResource(toAddress(path))
         } catch (error) {
           console.error('[workspace-editor] open failed', error)
+        }
+      }
+      /**
+       * Open a document tab in one DSH session, not in the visible one. The
+       * sidebar can only place a tab in a session whose layout it has adopted;
+       * a request for a session that is not shown yet stays queued on the host
+       * until that session is on screen.
+       * @param {string} sessionId - calling DSH session.
+       * @param {string} path - absolute document path.
+       * @returns {boolean} true when the tab was opened and may be acknowledged.
+       */
+      const openEditorIn = (sessionId, path) => {
+        const open = ctx.sidebarRight.openResourceIn
+        if (typeof open !== 'function' || typeof sessionId !== 'string' || sessionId === '') return false
+        const mounted = ctx.sidebarRight.mounted?.getSnapshot?.()
+        const adopted = typeof ctx.sidebarRight.tabsIn === 'function' ? ctx.sidebarRight.tabsIn(sessionId) : []
+        if (mounted !== sessionId && adopted.length === 0) return false
+        try {
+          open.call(ctx.sidebarRight, sessionId, toAddress(path))
+          return true
+        } catch (error) {
+          console.error('[workspace-editor] open in session failed', error)
+          return false
         }
       }
       const EditAction = makeEditAction(openEditor)
@@ -410,26 +434,47 @@ window.__ModuleLoader__.load({
           if (timers.has(sessionId)) return
           const tick = async () => {
             try {
-              const response = await fetch(`${ROUTE}/api/pending-open?session=${encodeURIComponent(sessionId)}`)
+              const query = `session=${encodeURIComponent(sessionId)}`
+              const response = await fetch(`${ROUTE}/api/pending-open?${query}`)
               if (!response.ok) return
               const body = await response.json()
-              for (const path of Array.isArray(body.paths) ? body.paths : []) openEditor(path)
+              const acked = []
+              for (const path of Array.isArray(body.paths) ? body.paths : []) {
+                if (typeof path === 'string' && path !== '' && openEditorIn(sessionId, path)) acked.push(path)
+              }
+              if (acked.length === 0) return
+              await fetch(`${ROUTE}/api/pending-open-ack?${query}`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ paths: acked }),
+              })
             } catch {}
           }
           void tick()
           timers.set(sessionId, setInterval(() => { void tick() }, 1500))
         }
-        const scan = () => {
-          try {
-            const byId = ctx.sessions?.list?.getSnapshot?.().byId ?? {}
-            for (const sessionId of Object.keys(byId)) poll(sessionId)
-          } catch {}
+        const stop = (sessionId) => {
+          const timer = timers.get(sessionId)
+          if (timer !== undefined) clearInterval(timer)
+          timers.delete(sessionId)
         }
-        const stop = ctx.sessions?.list?.subscribe?.(scan)
-        scan()
+        // Only the session on screen can receive a tab, so only that session's
+        // tab requests are polled; the rest stay queued until the user shows it.
+        const mounted = ctx.sidebarRight?.mounted
+        let shown = ''
+        const sync = () => {
+          const sessionId = typeof mounted?.getSnapshot === 'function' ? mounted.getSnapshot() : undefined
+          const next = typeof sessionId === 'string' ? sessionId : ''
+          if (next === shown) return
+          if (shown !== '') stop(shown)
+          shown = next
+          if (shown !== '') poll(shown)
+        }
+        const unsubscribe = typeof mounted?.subscribe === 'function' ? mounted.subscribe(sync) : undefined
+        sync()
         return () => {
-          if (typeof stop === 'function') stop()
-          for (const timer of timers.values()) clearInterval(timer)
+          if (typeof unsubscribe === 'function') unsubscribe()
+          for (const sessionId of [...timers.keys()]) stop(sessionId)
         }
       }, 'workspace-editor.open-stream')
       ctx.effect(() => ctx.sidebarRightTabs.register({

@@ -255,6 +255,8 @@ export function createDocStore(options = {}) {
   const docs = new Map()
   /** Case-insensitive absolute path to open document, for path-keyed writes. */
   const byPath = new Map()
+  /** Workspace root each DSH session last opened a document from. */
+  const sessionRoots = new Map()
   /** @type {Set<{ file: string, baseline: string, resolve: Function, timer: NodeJS.Timeout }>} */
   const waiters = new Set()
   /** @type {NodeJS.Timeout | undefined} */
@@ -362,7 +364,7 @@ export function createDocStore(options = {}) {
     return files.map((entry) => path.basename(entry.name, path.extname(entry.name)))
   }
 
-  /** @param {any} doc - open document record. */
+  /** @param {any} doc - open document record; a document has one lease and many DSH session owners. */
   function view(doc) {
     return {
       id: doc.id,
@@ -373,8 +375,13 @@ export function createDocStore(options = {}) {
       mtimeMs: doc.mtimeMs,
       modified: doc.modified,
       loadedRevision: doc.loadedRevision,
-      ownerSessionId: doc.ownerSessionId ?? '',
+      ownerSessionId: doc.owners.size === 0 ? '' : doc.owners.values().next().value,
     }
+  }
+
+  /** @param {any} doc - open document record. @param {string | undefined} sessionId - DSH session. */
+  function addOwner(doc, sessionId) {
+    if (typeof sessionId === 'string' && sessionId !== '') doc.owners.add(sessionId)
   }
 
   /** @param {string} file - absolute path. @returns {string} map key. */
@@ -414,13 +421,21 @@ export function createDocStore(options = {}) {
    */
   async function open(file, openOptions = {}) {
     const absolute = await confine(file, openOptions.cwd)
+    // A route request names its DSH session but not its workspace root; the
+    // root of the open that came from the agent is the one that applies.
+    if (typeof openOptions.sessionId === 'string' && openOptions.sessionId !== ''
+      && typeof openOptions.cwd === 'string' && openOptions.cwd !== '') {
+      sessionRoots.set(openOptions.sessionId, path.resolve(openOptions.cwd))
+    }
     const kind = EXTENSIONS[path.extname(absolute).toLowerCase()]
     if (kind === undefined) throw new DocError(`unsupported document type: ${path.extname(absolute)}`, { status: 400 })
     const current = await statOr404(store, absolute)
 
     const existing = byPath.get(pathKey(absolute))
     if (existing !== undefined) {
+      addOwner(existing, openOptions.sessionId)
       await refresh(existing)
+      notify({ type: 'document', source: 'open', document: view(existing), reload: false })
       return view(existing)
     }
 
@@ -442,7 +457,7 @@ export function createDocStore(options = {}) {
       mtimeMs: current.mtimeMs,
       modified: false,
       loadedRevision: current.revision,
-      ownerSessionId: typeof openOptions.sessionId === 'string' ? openOptions.sessionId : '',
+      owners: new Set(typeof openOptions.sessionId === 'string' && openOptions.sessionId !== '' ? [openOptions.sessionId] : []),
     }
     if (kind === 'word') {
       doc.binPath = await docxToBin(absolute, tempDir)
@@ -778,9 +793,23 @@ export function createDocStore(options = {}) {
 
   /** Close every editor document opened by one disposed DSH session. @param {string} ownerSessionId - DSH session. */
   async function closeOwner(ownerSessionId) {
+    sessionRoots.delete(ownerSessionId)
     for (const doc of [...docs.values()]) {
-      if (doc.ownerSessionId === ownerSessionId) await close(doc.id)
+      if (!doc.owners.has(ownerSessionId)) continue
+      doc.owners.delete(ownerSessionId)
+      if (doc.owners.size === 0) await close(doc.id)
     }
+  }
+
+  /**
+   * Whether a DSH session opened one document.
+   * @param {string} sessionId - DSH session.
+   * @param {string} file - document path.
+   * @returns {boolean} true when the session owns this document.
+   */
+  function owns(sessionId, file) {
+    const doc = byPath.get(pathKey(path.resolve(file)))
+    return doc !== undefined && doc.owners.has(sessionId)
   }
 
   /** Forget every document, waiter and timer (plugin disposal). */
@@ -816,6 +845,9 @@ export function createDocStore(options = {}) {
     close,
     closeOwner,
     disposeAll,
+    owns,
+    /** @param {string} sessionId - DSH session. @returns {string | undefined} the root its opens used. */
+    sessionRoot: (sessionId) => sessionRoots.get(sessionId),
   }
 }
 
