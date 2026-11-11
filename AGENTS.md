@@ -53,6 +53,14 @@ End a turn only when nothing can move without the user, or when the blocker is d
 
 Get agreement before publishing a component, changing its registry or scope, or recording a compatibility verdict. Do not edit the installed harness config. Everything else about how this repository is built is yours.
 
+## Context tiers
+
+Three tiers.
+
+- **Always read:** `AGENTS.md` and `docs/repo-map.md`, capped by a size check.
+- **Read on a task:** `docs/` and skills.
+- **Never auto-read:** logs, prompts, trash, scratch.
+
 ## Sub-agents
 
 Before you assign a sub-agent, assess what it adds to the cost of this session and decide whether delegation is worth it. A sub-agent costs its own context and tokens, a complete brief, round trips to collect and check the result, and rework if the brief was incomplete. Delegate when the work is independent or isolated, can run in parallel, is self-contained and verifiable, or would crowd your own context if you did it yourself. Do the work yourself when it is small, when it depends on context only you hold, when it is sequential with what you do next, when two tasks would write the same files, or when writing the brief would cost more than the task. The number of sub-agents is not evidence of thoroughness. If a sub-agent is blocked, say what is blocking it and what would unblock it.
