@@ -91,6 +91,27 @@ function nodeTokens(node) {
 }
 
 /**
+ * How many markup nodes one node stands for: a paragraph and each of its runs, a
+ * table and each of its cells and their paragraphs and runs, one for the rest.
+ * @param {object} node - markup node.
+ * @returns {number} node count.
+ */
+function nestedNodeCount(node) {
+  if (node.kind === 'paragraph') return 1 + (Array.isArray(node.runs) ? node.runs.length : 0)
+  if (node.kind === 'table') {
+    let count = 1
+    for (const row of Array.isArray(node.rows) ? node.rows : []) {
+      for (const cell of Array.isArray(row.cells) ? row.cells : []) {
+        count += 1
+        for (const paragraph of Array.isArray(cell.paragraphs) ? cell.paragraphs : []) count += nestedNodeCount(paragraph)
+      }
+    }
+    return count
+  }
+  return 1
+}
+
+/**
  * Build the markup view for one described document.
  * @param {{ blocks?: Array<object>, sections?: Array<object> }} description - engine description.
  * @param {{ from?: number, to?: number, limitNodes?: number, limitTokens?: number }} [options] - range and limits.
@@ -114,14 +135,17 @@ export function buildMarkupView(description, options = {}) {
 
   const nodes = []
   let tokens = 0
+  let used = 0
   let next = null
   for (const node of candidates) {
     const cost = nodeTokens(node)
-    if (nodes.length >= limitNodes || tokens + cost > limitTokens) {
+    const count = nestedNodeCount(node)
+    if (used + count > limitNodes || tokens + cost > limitTokens) {
       next = Number.isInteger(node.index) ? node.index : nodes.length
       break
     }
     nodes.push(node)
+    used += count
     tokens += cost
   }
   return { schema: 1, nodes, truncated: next !== null, next }

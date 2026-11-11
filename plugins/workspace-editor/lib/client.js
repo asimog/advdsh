@@ -25,6 +25,13 @@ window.__ModuleLoader__.load({
       edit: 'Edit',
       reload: 'Reload',
       'exportPdf': 'Export PDF',
+      'markup': 'Markup',
+      'markup.loading': 'Reading markup...',
+      'markup.failed': 'Cannot read markup',
+      'conflict.text': 'This document changed on disk. Your unsaved changes are kept.',
+      'conflict.saveCopy': 'Save as copy',
+      'conflict.reload': 'Reload',
+      'conflict.dismiss': 'Dismiss',
       opening: 'Opening document...',
       failed: 'Cannot open document',
       'waiting': 'Open a .docx or .pdf preview and choose Edit.',
@@ -46,6 +53,13 @@ window.__ModuleLoader__.load({
       edit: 'संपादित करें',
       reload: 'फिर लोड करें',
       'exportPdf': 'पीडीएफ़ निर्यात',
+      'markup': 'मार्कअप',
+      'markup.loading': 'मार्कअप पढ़ा जा रहा है...',
+      'markup.failed': 'मार्कअप नहीं पढ़ा जा सका',
+      'conflict.text': 'यह दस्तावेज़ डिस्क पर बदल गया है। आपके सहेजे न गए बदलाव रखे गए हैं।',
+      'conflict.saveCopy': 'प्रतिलिपि के रूप में सहेजें',
+      'conflict.reload': 'फिर लोड करें',
+      'conflict.dismiss': 'खारिज करें',
       opening: 'दस्तावेज़ खुल रहा है...',
       failed: 'दस्तावेज़ नहीं खुल सका',
       'waiting': '.docx या .pdf पूर्वावलोकन खोलें और संपादित करें चुनें।',
@@ -85,6 +99,7 @@ window.__ModuleLoader__.load({
         font: 'inherit', cursor: 'pointer',
       },
       frame: { flex: 1, width: '100%', border: '0', background: '#1e1e2e' },
+      frameBox: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
       banner: {
         display: 'flex', gap: '6px', alignItems: 'center', padding: '6px 8px',
         fontSize: '12px', color: 'var(--dsw-alias-label-primary)',
@@ -92,6 +107,16 @@ window.__ModuleLoader__.load({
         borderBottom: '1px solid var(--dsw-alias-border-secondary)',
       },
       message: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '16px', fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)', textAlign: 'center' },
+      markup: {
+        maxHeight: '45%', overflow: 'auto', padding: '6px 8px', fontSize: '12px',
+        color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-secondary, #181825)',
+        borderBottom: '1px solid var(--dsw-alias-border-secondary)', fontFamily: 'monospace',
+      },
+      markupRow: { margin: '0 0 4px 0' },
+      markupId: { color: 'var(--dsw-alias-label-tertiary)', marginRight: '6px' },
+      markupRun: { marginRight: '2px' },
+      markupInserted: { textDecoration: 'underline' },
+      markupDeleted: { textDecoration: 'line-through', opacity: 0.7 },
     }
 
     /** @param {unknown} response - fetch result. */
@@ -99,6 +124,78 @@ window.__ModuleLoader__.load({
       const body = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(body.error ?? `request failed (${response.status})`)
       return body
+    }
+
+    /**
+     * Read-only markup inspector shown outside the editor iframe. It renders the
+     * markup view of the open document as text: no input, select or editable
+     * element exists in this pane.
+     * @param {{ t?: Function, view?: object, error?: string }} props - view or error.
+     */
+    function MarkupPane(props) {
+      const t = typeof props.t === 'function' ? props.t : (key) => key
+      if (typeof props.error === 'string' && props.error !== '') {
+        return react.createElement('div', { style: styles.markup, 'data-workspace-editor-markup': 'error' },
+          react.createElement('div', null, `${t('markup.failed')}: ${props.error}`))
+      }
+      const view = props.view
+      if (view === undefined || view === null) {
+        return react.createElement('div', { style: styles.markup, 'data-workspace-editor-markup': 'loading' },
+          react.createElement('div', null, t('markup.loading')))
+      }
+      const nodes = Array.isArray(view.nodes) ? view.nodes : []
+      const rows = nodes.map((node, position) => {
+        const key = `${node.kind}:${node.id ?? node.index ?? position}`
+        if (node.kind === 'paragraph') {
+          const runs = Array.isArray(node.runs) ? node.runs : []
+          return react.createElement('div', {
+            key, style: styles.markupRow, 'data-node-kind': 'paragraph', 'data-block-id': node.id,
+          },
+          react.createElement('span', { style: styles.markupId }, `${node.index} ${node.id}`),
+          runs.length === 0
+            ? react.createElement('span', null, node.text)
+            : runs.map((run, index) => react.createElement('span', {
+              key: `run:${index}`,
+              'data-run-index': run.runIndex,
+              'data-inserted': run.inserted === true ? 'true' : undefined,
+              'data-deleted': run.deleted === true ? 'true' : undefined,
+              style: {
+                ...styles.markupRun,
+                ...(run.inserted === true ? styles.markupInserted : {}),
+                ...(run.deleted === true ? styles.markupDeleted : {}),
+              },
+            }, typeof run.text === 'string' ? run.text : '')))
+        }
+        if (node.kind === 'table') {
+          const rowsOfTable = Array.isArray(node.rows) ? node.rows : []
+          return react.createElement('div', {
+            key, style: styles.markupRow, 'data-node-kind': 'table', 'data-block-id': node.id,
+          },
+          react.createElement('span', { style: styles.markupId }, `${node.index} ${node.id}`),
+          rowsOfTable.map((row, rowIndex) => react.createElement('div', { key: `row:${rowIndex}` },
+            (Array.isArray(row.cells) ? row.cells : [])
+              .map((cell) => (typeof cell.text === 'string' ? cell.text : ''))
+              .join(' | '))))
+        }
+        if (node.kind === 'section') {
+          return react.createElement('div', {
+            key, style: styles.markupRow, 'data-node-kind': 'section',
+          },
+          react.createElement('span', { style: styles.markupId }, `section ${node.index}`),
+          node.props && node.props.orientation ? String(node.props.orientation) : '')
+        }
+        return react.createElement('div', {
+          key, style: styles.markupRow, 'data-node-kind': String(node.kind),
+        },
+        react.createElement('span', { style: styles.markupId }, String(node.id ?? node.index ?? position)),
+        String(node.type ?? node.kind ?? 'opaque'))
+      })
+      return react.createElement('div', {
+        'data-workspace-editor-markup': String(view.schema ?? 1),
+        role: 'region',
+        'aria-label': t('markup'),
+        style: styles.markup,
+      }, rows)
     }
 
     /** Editor tab body: toolbar, status, and the host page in an iframe. */
@@ -120,6 +217,9 @@ window.__ModuleLoader__.load({
       const [reloadToken, setReloadToken] = react.useState(0)
       const [loadedMtime, setLoadedMtime] = react.useState(0)
       const [loadedRevision, setLoadedRevision] = react.useState('')
+      const [markupOpen, setMarkupOpen] = react.useState(false)
+      const [markupView, setMarkupView] = react.useState(undefined)
+      const [markupError, setMarkupError] = react.useState('')
       const docRef = react.useRef(undefined)
       const frameRef = react.useRef(null)
 
@@ -165,10 +265,13 @@ window.__ModuleLoader__.load({
           if (typeof data.text !== 'string' || data.text.trim() === '') return
           if (typeof data.x !== 'number' || typeof data.y !== 'number') return
           if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) return
+          // A selection quote names the store revision it was taken at; without
+          // a known revision the menu would have to guess one.
+          if (loadedRevision === '') return
           const rect = frame.getBoundingClientRect()
           openSelectionMenu({
             path: typeof doc.path === 'string' && doc.path !== '' ? doc.path : wanted,
-            revision: loadedRevision !== '' ? loadedRevision : undefined,
+            revision: loadedRevision,
             text: data.text,
             dirty: data.dirty === true,
           }, { x: rect.left + data.x, y: rect.top + data.y })
@@ -240,23 +343,59 @@ window.__ModuleLoader__.load({
         return () => { try { source.close() } catch (error) {} }
       }, [doc])
 
+      // The Markup button reads the markup view of the shown bytes; a new store
+      // revision replaces it so the pane never describes an older revision.
+      react.useEffect(() => {
+        if (!markupOpen || doc === undefined) return undefined
+        let live = true
+        setMarkupError('')
+        fetch(routeUrl(`/api/markup?id=${encodeURIComponent(doc.id)}`))
+          .then(readJson)
+          .then((body) => { if (live) setMarkupView(body.view) })
+          .catch((error) => {
+            if (!live) return
+            setMarkupView(undefined)
+            setMarkupError(error instanceof Error ? error.message : String(error))
+          })
+        return () => { live = false }
+      }, [markupOpen, doc, loadedRevision])
+
       const reloadNow = () => {
         setConflict(undefined)
         setFailure('')
+        setMarkupView(undefined)
         setReloadToken((value) => value + 1)
+      }
+      /** Keep the unsaved buffer: the editor writes it to a copy next to the file. */
+      const saveAsCopy = () => {
+        const frame = frameRef.current
+        if (frame === null || frame.contentWindow === null || doc === undefined) return
+        const source = typeof doc.path === 'string' && doc.path !== '' ? doc.path : wanted
+        const dot = source.lastIndexOf('.')
+        const target = dot > source.lastIndexOf('/') && dot > source.lastIndexOf('\\')
+          ? `${source.slice(0, dot)} (copy)${source.slice(dot)}`
+          : `${source} (copy)`
+        frame.contentWindow.postMessage({ type: 'workspace-editor/save-as-copy', path: target }, window.location.origin)
       }
       const banner = conflict === undefined ? null : react.createElement(
         'div',
-        { style: styles.banner },
-        react.createElement('span', { style: styles.name }, `The file changed on disk: ${conflict.path || (doc && doc.path) || wanted}.`),
-        react.createElement('button', { type: 'button', style: styles.button, onClick: reloadNow }, t('reload')),
-        react.createElement('button', { type: 'button', style: styles.button, onClick: () => setConflict(undefined) }, 'Dismiss'),
+        { style: styles.banner, 'data-workspace-editor-conflict': conflict.code },
+        react.createElement('span', { style: styles.name }, t('conflict.text')),
+        react.createElement('button', { type: 'button', style: styles.button, onClick: saveAsCopy }, t('conflict.saveCopy')),
+        react.createElement('button', { type: 'button', style: styles.button, onClick: reloadNow }, t('conflict.reload')),
+        react.createElement('button', { type: 'button', style: styles.button, onClick: () => setConflict(undefined) }, t('conflict.dismiss')),
       )
 
       const header = react.createElement(
         'div',
         { style: styles.bar },
-        react.createElement('span', { style: styles.name }, doc === undefined ? (wanted || t('waiting')) : doc.name),
+        react.createElement('span', { style: styles.name }, doc === undefined ? wanted : doc.name),
+        doc === undefined ? null : react.createElement('button', {
+          type: 'button',
+          style: styles.button,
+          'data-workspace-editor-markup-toggle': markupOpen ? 'on' : 'off',
+          onClick: () => { setMarkupOpen((open) => !open) },
+        }, t('markup')),
         doc === undefined ? null : react.createElement('button', {
           type: 'button',
           style: styles.button,
@@ -276,7 +415,7 @@ window.__ModuleLoader__.load({
       } else if (doc === undefined) {
         body = react.createElement('div', { style: styles.message }, busy ? t('opening') : t('waiting'))
       } else {
-        body = react.createElement('iframe', {
+        const frame = react.createElement('iframe', {
           key: `${doc.id}:${reloadToken}`,
           ref: frameRef,
           src: routeUrl(`/host.html?doc=${encodeURIComponent(doc.id)}&rev=${reloadToken}&path=${encodeURIComponent(doc.path)}`),
@@ -284,6 +423,11 @@ window.__ModuleLoader__.load({
           style: styles.frame,
           title: doc.name,
         })
+        body = markupOpen
+          ? react.createElement('div', { style: styles.frameBox },
+            react.createElement(MarkupPane, { t, view: markupView, error: markupError }),
+            frame)
+          : frame
       }
 
       return react.createElement('div', { 'data-workspace-editor': doc === undefined ? 'empty' : doc.kind, style: styles.root }, header, banner, body)

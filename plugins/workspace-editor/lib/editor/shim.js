@@ -151,11 +151,76 @@
     })
   }
 
+  /** Save the unsaved buffer as a copy beside the document, numbering a taken name. */
+  function numberedCopyName(target, number) {
+    var dot = target.lastIndexOf('.')
+    var slash = Math.max(target.lastIndexOf('/'), target.lastIndexOf('\\'))
+    if (dot > slash) return target.slice(0, dot) + ' (copy ' + number + ')' + target.slice(dot)
+    return target + ' (copy ' + number + ')'
+  }
+
+  async function saveCopyTo(target) {
+    if (typeof target !== 'string' || target === '') return
+    var ref = getEditor()
+    if (!ref.editor) { log('save as copy aborted: editor API not found'); return }
+    var bytes = toBytes(ref.editor.asc_nativeGetFile())
+    if (bytes.length === 0) { log('save as copy aborted: editor returned no bytes'); return }
+    var base = hostState.revision
+    var candidate = target
+    for (var attempt = 1; attempt <= 6; attempt += 1) {
+      var url = API + '/save-as?id=' + encodeURIComponent(docId) + '&path=' + encodeURIComponent(candidate)
+      if (base !== '') url += '&base=' + encodeURIComponent(base)
+      var response
+      try {
+        response = await fetch(url, { method: 'POST', body: bytes })
+      } catch (error) {
+        log('save as copy failed: ' + String(error && error.message ? error.message : error))
+        return
+      }
+      if (response.ok) {
+        var saved = await response.json().catch(function () { return {} })
+        showStatus('Saved a copy at ' + String(saved.path || candidate) + '.')
+        return
+      }
+      var failure = await response.json().catch(function () { return {} })
+      if (response.status !== 409 || failure.code !== 'DOC_TARGET_EXISTS') {
+        log('save as copy failed: ' + String(failure.error || response.status))
+        return
+      }
+      candidate = numberedCopyName(target, attempt + 1)
+    }
+    log('save as copy failed: no free copy name next to ' + target)
+  }
+
   /**
    * Execute one review command through the editor API. Accept/reject commands
    * change the editor buffer; the lawyer saves through the normal save path.
    */
   var DISPLAY_MODES = { final: 'Final', original: 'Original', simple: 'Simple', edit: 'Edit' }
+  /** Commands that change the document; WD-064 reports how many changes they touch. */
+  var CHANGING_COMMANDS = {
+    acceptAll: true, rejectAll: true, acceptSelection: true, rejectSelection: true,
+  }
+  /** The number of tracked changes the editor holds, from the converter's own report. */
+  function countTrackedChanges() {
+    var ref = getEditor()
+    var editor = ref.editor
+    if (!editor || typeof editor.asc_GetTrackRevisionsReportByAuthors !== 'function') return 0
+    try {
+      var report = editor.asc_GetTrackRevisionsReportByAuthors() || {}
+      var total = 0
+      for (var author in report) {
+        if (!Object.prototype.hasOwnProperty.call(report, author)) continue
+        var changes = report[author]
+        if (changes && typeof changes.length === 'number') total += changes.length
+      }
+      return total
+    } catch (error) {
+      return 0
+    }
+  }
+  /** The notice a File > Open or Ctrl+O shows: documents open from the DSH file panel. */
+  var FILE_PANEL_NOTICE = 'Open documents from the DSH file panel.'
   function execReviewCommand(command, args) {
     var ref = getEditor()
     if (!ref.editor) return { ok: false, error: 'editor API is not ready' }
@@ -178,8 +243,8 @@
       } else if (command === 'save') {
         if (typeof window.AscDesktopEditor.LocalFileSave === 'function') window.AscDesktopEditor.LocalFileSave('')
       } else if (command === 'reload') {
-        window.location.reload()
-        return { ok: true }
+        // The acknowledgement goes out before this tab navigates; see handleCommand.
+        return { ok: true, reload: true }
       } else {
         return { ok: false, error: 'unknown command: ' + String(command) }
       }
@@ -194,15 +259,17 @@
     if (frame === null || typeof frame !== 'object') return
     if (typeof frame.id === 'string' && frame.id !== '' && frame.id !== docId) return
     if (typeof frame.path === 'string' && frame.path !== '' && hostState.path !== '' && frame.path !== hostState.path) return
+    var changeCount = CHANGING_COMMANDS[frame.command] === true ? countTrackedChanges() : 0
     var result = execReviewCommand(frame.command, frame.args)
     if (!result.ok) log('review command failed: ' + result.error)
-    try {
-      fetch(API + '/editor' + sessionQuery(), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: docId, revision: hostState.revision, command: frame.command, ok: result.ok, requestId: frame.requestId, changeCount: 0 }),
-      })
-    } catch (e) {}
+    var ack = fetch(API + '/editor' + sessionQuery(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: docId, revision: hostState.revision, command: frame.command, ok: result.ok, requestId: frame.requestId, changeCount: changeCount }),
+    })
+    // A reload command answers before the tab navigates away, so the host sees
+    // the acknowledgement; the page reload follows it.
+    if (result.reload === true) ack.then(function () { window.location.reload() }).catch(function () { window.location.reload() })
   }
 
   /** A published document revision: reload only while the editor holds no unsaved work. */
@@ -271,8 +338,14 @@
     if (event.source !== window.parent) return
     if (event.origin !== window.location.origin) return
     var data = event.data
-    if (data === null || typeof data !== 'object' || data.type !== 'workspace-editor/command') return
-    handleCommand({ id: docId, command: data.command, args: data.args })
+    if (data === null || typeof data !== 'object') return
+    if (data.type === 'workspace-editor/command') {
+      handleCommand({ id: docId, command: data.command, args: data.args })
+      return
+    }
+    if (data.type === 'workspace-editor/save-as-copy') {
+      void saveCopyTo(String(data.path || ''))
+    }
   })
 
   var shim = {
@@ -303,9 +376,9 @@
     /** The host page opens the document itself, in boot.js. */
     LocalStartOpen: function () {},
 
-    /** One document per tab: an open request from inside the editor is refused. */
+    /** One document per tab: an open request from inside the editor names the DSH file panel. */
     LocalFileOpen: function () {
-      log('open is not available inside a document tab')
+      showStatus(FILE_PANEL_NOTICE)
     },
 
     LocalFileSave: async function (param) {
@@ -404,4 +477,5 @@
   else window.addEventListener('load', startHostBridge)
   window._wsExecReviewCommand = execReviewCommand
   window._wsGetEditor = getEditor
+  window._wsFileOpenNotice = function () { showStatus(FILE_PANEL_NOTICE) }
 })()

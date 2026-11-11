@@ -133,7 +133,7 @@ export function apply(ctx) {
                   },
                 },
               },
-              required: ['applied', 'changed', 'revision', 'conflicts', 'failed'],
+              required: ['applied', 'changed', 'conflicts'],
               additionalProperties: false,
             },
           },
@@ -142,9 +142,8 @@ export function apply(ctx) {
         },
         render: (_args, value) => [{
           type: 'text',
-          text: `${value.forks.length} fork(s): ${value.forks.map((fork) => `${fork.label}=${fork.status}${fork.summary ? ` (${String(fork.summary).slice(0, 80)})` : ''}`).join(', ')}\n`
-            + `merged ${value.merged.applied} change(s)${value.merged.conflicts.length > 0 ? `; ${value.merged.conflicts.length} conflict(s) on ${value.merged.conflicts.map((conflict) => conflict.id).join(', ')}` : ''}`
-            + `${value.merged.failed.length > 0 ? `; ${value.merged.failed.length} merge failure(s)` : ''}`,
+          text: `${value.forks.length} fork(s): ${value.forks.map((fork) => `${fork.label}=${fork.status}${fork.summary ? `: ${String(fork.summary).slice(0, 80)}` : ''}`).join(', ')}\n`
+            + `merged ${value.merged.applied} change(s)${value.merged.conflicts.length > 0 ? `; ${value.merged.conflicts.length} conflict(s) on ${value.merged.conflicts.map((conflict) => conflict.id).join(', ')}` : ''}`,
         }],
       },
       async execute(args, exec) {
@@ -231,7 +230,7 @@ export function apply(ctx) {
           const completed = runs.filter((run) => run.status === 'completed').map((run) => run.fork.handle)
           let merged
           if (completed.length === 0) {
-            merged = { applied: 0, changed: false, revision: 0, conflicts: [], failed: [], operations: [] }
+            merged = { applied: 0, changed: false, revision: 0, conflicts: [], operations: [] }
           } else {
             merged = await model.merge(args.doc, completed)
           }
@@ -260,7 +259,6 @@ export function apply(ctx) {
               changed: merged.changed === true,
               revision: merged.revision,
               conflicts: merged.conflicts,
-              failed: merged.failed,
             },
           }
         } finally {

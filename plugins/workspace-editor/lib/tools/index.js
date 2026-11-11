@@ -219,6 +219,7 @@ export function apply(ctx) {
         after: { type: 'number', description: 'Blocks after the focus for context.' },
         limitNodes: { type: 'number', description: 'Maximum markup nodes.' },
         limitTokens: { type: 'number', description: 'Maximum markup tokens.' },
+        redline: { type: 'boolean', description: 'Show tracked changes as inline <del> and <ins> tags.' },
       },
       required: ['doc'],
       additionalProperties: false,
@@ -229,7 +230,6 @@ export function apply(ctx) {
         properties: {
           doc: { type: 'string' },
           path: { type: 'string' },
-          revision: { type: 'number' },
           contentHash: { type: 'string' },
           mode: { type: 'string' },
           totalBlocks: { type: 'number' },
@@ -284,7 +284,7 @@ export function apply(ctx) {
             },
           },
         },
-        required: ['doc', 'path', 'revision', 'contentHash', 'mode', 'totalBlocks', 'tokens', 'text', 'truncated', 'blocks', 'matches', 'outline'],
+        required: ['doc', 'path', 'contentHash', 'mode', 'totalBlocks', 'tokens', 'text', 'truncated', 'blocks', 'matches', 'outline'],
         additionalProperties: false,
       },
       render: (_args, value) => [{
@@ -307,11 +307,11 @@ export function apply(ctx) {
         after: args.after,
         limitNodes: args.limitNodes,
         limitTokens: args.limitTokens,
+        redline: args.redline === true,
       })
       return {
         doc: read.handle,
         path: read.path,
-        revision: read.revision,
         contentHash: read.contentHash,
         mode: read.mode,
         totalBlocks: read.totalBlocks,
@@ -568,8 +568,11 @@ export function apply(ctx) {
             previousRevision: { type: 'string' },
             size: { type: 'number' },
             sha256: { type: 'string' },
+            contributors: { type: 'array', items: { type: 'string' } },
+            blocksChanged: { type: 'number' },
+            blocksTotal: { type: 'number' },
           },
-          required: ['doc', 'path', 'applied', 'changed', 'storeRevision'],
+          required: ['doc', 'path', 'applied', 'changed', 'storeRevision', 'contributors', 'blocksChanged', 'blocksTotal'],
           additionalProperties: false,
         },
         render: (_args, value) => [{
@@ -585,7 +588,7 @@ export function apply(ctx) {
         return {
           card: 'generic',
           title: meta.applied ? `Committed ${meta.path ?? 'document'}` : 'No pending edits',
-          content: meta.applied ? `revision ${String(meta.revision ?? '').slice(0, 12)}${Number.isFinite(meta.size) ? ` · ${meta.size} bytes` : ''}` : undefined,
+          content: meta.applied ? `storeRevision ${String(meta.storeRevision ?? '').slice(0, 12)}${Number.isFinite(meta.size) ? ` · ${meta.size} bytes` : ''}` : undefined,
         }
       },
       async execute(args) {
@@ -599,6 +602,9 @@ export function apply(ctx) {
           ...(typeof committed.previousRevision === 'string' ? { previousRevision: committed.previousRevision } : {}),
           ...(Number.isFinite(committed.size) ? { size: committed.size } : {}),
           ...(typeof committed.sha256 === 'string' ? { sha256: committed.sha256 } : {}),
+          contributors: Array.isArray(committed.contributors) ? committed.contributors : [],
+          blocksChanged: Number.isInteger(committed.blocksChanged) ? committed.blocksChanged : 0,
+          blocksTotal: Number.isInteger(committed.blocksTotal) ? committed.blocksTotal : 0,
         }
       },
     })
@@ -896,7 +902,6 @@ export function apply(ctx) {
           userInstruction: { oneOf: [{ type: 'string' }, { type: 'null' }] },
           command: { type: 'string' },
           path: { type: 'string' },
-          revision: { type: 'string' },
           changed: { type: 'boolean' },
           timedOut: { type: 'boolean' },
           pdf: { type: 'string' },
@@ -907,11 +912,11 @@ export function apply(ctx) {
       render: (_args, value) => [{
         type: 'text',
         text: value.action === 'status'
-          ? `${(value.documents ?? []).length} open editor document(s); engine ${value.engine?.state ?? (value.engine?.ready ? 'ready' : 'not-started')}`
+          ? `${(value.documents ?? []).length} open editor document(s); engine ${engineWord(value.engine)}`
           : value.action === 'export_pdf'
             ? `exported PDF ${value.pdf ?? ''}`
             : value.action === 'wait'
-              ? `wait: ${value.changed ? 'revision changed' : 'timed out'} at ${value.revision ?? ''}`
+              ? `wait: ${value.changed ? 'revision changed' : 'timed out'}${typeof value.path === 'string' ? ` for ${value.path}` : ''}`
               : `${value.action} ok (${value.command ?? value.path ?? value.doc ?? ''})`,
       }],
     },
@@ -934,7 +939,7 @@ export function apply(ctx) {
       }
       if (args.action === 'wait') {
         const waited = await documents.wait(args.path, { since: args.since, timeoutMs: args.timeoutMs })
-        return { action: 'wait', ...waited }
+        return { action: 'wait', path: waited.path, changed: waited.changed === true, timedOut: waited.timedOut === true }
       }
       if (args.action === 'export_pdf') {
         if (!hasDoc && !hasPath) throw new WorkspaceError(ERROR_CODES.INVALID_ARGS, 'export_pdf needs doc or path')
@@ -944,10 +949,14 @@ export function apply(ctx) {
       if (args.action === 'save') {
         if (!writeEnabled) throw new WorkspaceError(ERROR_CODES.WRITE_DISABLED, 'document writes are disabled (WORKSPACE_DOCX_WRITE=off)')
         const document = documents.list().find((entry) => entry.id === args.doc || entry.path === args.path)
-        return { action: 'save', command: 'save', delivered: documents.command({ id: document ? document.id : undefined, path: args.path, command: 'save' }).delivered }
+        const sent = await documents.command({ id: document ? document.id : undefined, path: args.path, command: 'save', awaitAck: true })
+        if (sent.executed !== true) throw new WorkspaceError(ERROR_CODES.EDITOR_NOT_OPEN, 'no editor host page acknowledged the save command')
+        return { action: 'save', command: 'save', executed: true, delivered: sent.delivered }
       }
       if (args.action === 'reload') {
-        return { action: 'reload', command: 'reload', delivered: documents.command({ id: args.doc, path: args.path, command: 'reload' }).delivered }
+        const sent = await documents.command({ id: args.doc, path: args.path, command: 'reload', awaitAck: true })
+        if (sent.executed !== true) throw new WorkspaceError(ERROR_CODES.EDITOR_NOT_OPEN, 'no editor host page acknowledged the reload command')
+        return { action: 'reload', command: 'reload', executed: true, delivered: sent.delivered }
       }
       if (args.action === 'review') {
         if (typeof args.command !== 'string' || !REVIEW_COMMANDS.has(args.command)) {
@@ -960,10 +969,11 @@ export function apply(ctx) {
           throw new WorkspaceError(ERROR_CODES.REVIEW_NOT_AUTHORIZED, 'a review command that changes the document needs userInstruction')
         }
         const sent = await documents.command({ id: args.doc, path: args.path, command: args.command, args: args.args, awaitAck: true })
+        if (sent.executed !== true) throw new WorkspaceError(ERROR_CODES.EDITOR_NOT_OPEN, 'no editor host page acknowledged the review command')
         return {
           action: 'review',
           command: args.command,
-          executed: sent.executed === true,
+          executed: true,
           changeCount: Number.isInteger(sent.changeCount) ? sent.changeCount : 0,
           userInstruction: args.userInstruction ?? null,
           delivered: sent.delivered,
@@ -996,11 +1006,27 @@ function engineStatus(ctx) {
   try {
     const engine = ctx.docxEngine
     const status = engine && typeof engine.status === 'function' ? engine.status() : { running: false, ready: false }
-    const state = status.broken === true ? 'broken' : status.ready === true ? 'ready' : status.running === true ? 'restarting' : 'not-started'
+    const broken = status.broken !== undefined && status.broken !== null && status.broken !== false
+    const state = broken ? 'broken' : status.ready === true ? 'ready' : status.running === true ? 'restarting' : 'not-started'
     return { ...status, state }
   } catch (error) {
     return { running: false, ready: false, state: 'broken' }
   }
+}
+
+/**
+ * Human words for one engine state in the rendered result text.
+ * @param {object} [engine] - the editor tool's engine fact.
+ * @returns {string} ready, restarting, broken or not started.
+ */
+function engineWord(engine) {
+  const state = engine && typeof engine.state === 'string'
+    ? engine.state
+    : engine && engine.ready === true ? 'ready' : 'not-started'
+  if (state === 'ready') return 'ready'
+  if (state === 'restarting') return 'restarting'
+  if (state === 'broken') return 'broken'
+  return 'not started'
 }
 
 /** @param {unknown} text - block text. @param {number} limit - cap. @returns {string} */

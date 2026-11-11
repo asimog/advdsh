@@ -151,6 +151,32 @@ function formatBlock(block) {
 }
 
 /**
+ * Choose the block annotation for one read: redline on request, plain otherwise.
+ * @param {{ redline?: boolean }} readOptions - read request.
+ * @returns {(block: object) => string} one formatter.
+ */
+function formatBlockWith(readOptions) {
+  return readOptions !== null && typeof readOptions === 'object' && readOptions.redline === true ? formatBlockRedline : formatBlock
+}
+
+/**
+ * One block annotated with inline redline tags: tracked deletions become
+ * `<del>…</del>` and tracked insertions `<ins>…</ins>`, in run order.
+ * @param {object} block - described block.
+ * @returns {string} the annotated block line.
+ */
+function formatBlockRedline(block) {
+  if (block.kind !== 'paragraph' || !Array.isArray(block.runs) || block.runs.length === 0) return formatBlock(block)
+  const text = block.runs.map((run) => {
+    const value = typeof run.text === 'string' ? run.text : ''
+    if (run.deleted === true) return `<del>${value}</del>`
+    if (run.inserted === true) return `<ins>${value}</ins>`
+    return value
+  }).join('')
+  return `[${block.id}] ${text}`
+}
+
+/**
  * Comparison signature for the three-way merge: kind, normalized text and table
  * extent. Whitespace runs collapse so a reflow is not a semantic change.
  * @param {object} block - described block.
@@ -663,7 +689,7 @@ export function createDocxModel(options) {
             hint: `document is large (${description.tokens} tokens, ${description.paragraphs} paragraphs); use outline, range, search or context`,
           }
         }
-        return { ...base, mode: 'full', blocks, text: blocks.map(formatBlock).join('\n'), truncated: false }
+        return { ...base, mode: 'full', blocks, text: blocks.map(formatBlockWith(readOptions)).join('\n'), truncated: false }
       }
       if (mode === 'full') {
         if (oversized) {
@@ -673,7 +699,7 @@ export function createDocxModel(options) {
             { details: { tokens: description.tokens, paragraphs: description.paragraphs, limits, modes: ['outline', 'range', 'search', 'context'] } },
           )
         }
-        return { ...base, blocks, text: blocks.map(formatBlock).join('\n'), truncated: false }
+        return { ...base, blocks, text: blocks.map(formatBlockWith(readOptions)).join('\n'), truncated: false }
       }
       if (mode === 'markup') {
         const view = buildMarkupView({ blocks, sections: description.sections }, {
@@ -685,11 +711,15 @@ export function createDocxModel(options) {
         return { ...base, mode: 'markup', schema: view.schema, nodes: view.nodes, text: '', truncated: view.truncated, next: view.next }
       }
       if (mode === 'outline') {
+        // An empty outline is not an empty answer: name the modes that work.
+        const outlineText = description.outline.length === 0
+          ? 'No headings. Use range, search or context.'
+          : description.outline.map((row) => `[${row.id}] ${'  '.repeat(row.level)}${row.text}`).join('\n')
         return {
           ...base,
           blocks: [],
           outline: description.outline,
-          text: description.outline.map((row) => `[${row.id}] ${'  '.repeat(row.level)}${row.text}`).join('\n'),
+          text: outlineText,
           truncated: false,
         }
       }
@@ -758,6 +788,33 @@ export function createDocxModel(options) {
         text: selection.map(formatBlock).join('\n'),
         truncated: false,
         focus: { id: target.id, index: target.index },
+      }
+    },
+
+    /**
+     * Read the markup view of one document for its editor tab. A tab is not an
+     * agent: the document session is opened only when the file has none for the
+     * DSH session, and it is closed again so inspection leaves no session behind.
+     * @param {string} input - document path.
+     * @param {{ cwd?: string, sessionId?: string }} [options] - workspace root and DSH session.
+     * @returns {Promise<{ path: string, storeRevision: string, view: object }>} the markup view.
+     */
+    async markupFor(input, options = {}) {
+      const owner = typeof options.sessionId === 'string' ? options.sessionId : ''
+      const before = new Set()
+      for (const session of sessions.values()) {
+        if (session.ownerSessionId === owner) before.add(session.handle)
+      }
+      const opened = await model.open(input, { cwd: options.cwd, sessionId: options.sessionId })
+      try {
+        const read = await model.read(opened.handle, { mode: 'markup' })
+        return {
+          path: opened.path,
+          storeRevision: opened.baseRevision,
+          view: { schema: read.schema, nodes: read.nodes, truncated: read.truncated, next: read.next },
+        }
+      } finally {
+        if (!before.has(opened.handle)) await model.close(opened.handle).catch(() => {})
       }
     },
 
@@ -963,6 +1020,7 @@ export function createDocxModel(options) {
         stale: session.stale,
         pending: { changes: diff.counts, ops: session.opLog.length },
         commits: session.revisions,
+        history: backups,
         backups,
       }
     },
@@ -1065,6 +1123,7 @@ export function createDocxModel(options) {
         lease.revision = applied.revision
         lease.updatedAt = now().toISOString()
       }
+      const blocksChanged = new Set(session.opLog.flatMap((entry) => (entry.affected ?? []).map((item) => item.id))).size
       await rebase(session, saved.bytes)
       log('info', 'committed document', { handle: session.handle, path: session.path, revision: applied.revision, size: record.size })
       return {
@@ -1076,7 +1135,9 @@ export function createDocxModel(options) {
         previousRevision: base,
         size: record.size,
         sha256: record.sha256,
-        changedBlocks: record.ops,
+        contributors: record.contributors,
+        blocksChanged,
+        blocksTotal: Array.isArray(session.baseBlocks) ? session.baseBlocks.length : 0,
       }
     },
 
@@ -1249,11 +1310,12 @@ export function createDocxModel(options) {
               task: candidate.label,
               text: candidate.block === undefined ? null : clip(candidate.block.text, 300),
             })),
-            reason: 'parent-changed',
+            reason: 'both-changed',
           })
           continue
         }
         if (distinct.size > 1) {
+          const deleted = [...distinct.values()].some((candidate) => candidate.block === undefined)
           conflicts.push({
             id,
             base: base === undefined ? null : clip(base.text, 300),
@@ -1262,7 +1324,7 @@ export function createDocxModel(options) {
               task: candidate.label,
               text: candidate.block === undefined ? null : clip(candidate.block.text, 300),
             })),
-            reason: 'fork-diverged',
+            reason: deleted ? 'delete-vs-edit' : 'divergent-forks',
           })
           continue
         }
@@ -1426,7 +1488,6 @@ export function createDocxModel(options) {
         applied: applied.length,
         operations: applied,
         conflicts,
-        failed,
         revision: parent.revision,
         changed: applied.length > 0,
       }
@@ -1465,6 +1526,9 @@ export function createDocxModel(options) {
       for (const [key, value] of byKey) {
         if (value === session.handle) byKey.delete(key)
       }
+      // A closed fork no longer occupies a fork slot, so the next unlabelled
+      // fork reuses its number.
+      if (session.fork !== undefined) sessions.get(session.fork.parent)?.forkChildren.delete(session.handle)
       const lease = leases.get(pathKey(session.path))
       if (lease !== undefined && lease.holder === session.handle) leases.delete(pathKey(session.path))
       await engine.close(session.engineSessionId).catch(() => {})

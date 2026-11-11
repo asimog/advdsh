@@ -225,12 +225,32 @@
     }, true)
   }
 
+  /**
+   * Ctrl+O names the DSH file panel instead of a file dialog. The editor runs
+   * in nested frames, so every frame document carries the listener.
+   */
+  function installFileOpenNotice(win) {
+    var doc = null
+    try { doc = win.document } catch (e) { return }
+    if (!doc || doc.__wsFileOpenBound) return
+    doc.__wsFileOpenBound = true
+    doc.addEventListener('keydown', function (event) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+      var key = String(event.key || '').toLowerCase()
+      if (key !== 'o' && event.code !== 'KeyO') return
+      event.preventDefault()
+      event.stopPropagation()
+      if (typeof window._wsFileOpenNotice === 'function') window._wsFileOpenNotice()
+    }, true)
+  }
+
   function injectInto(win) {
     try {
       if (win && !win.AscDesktopEditor) win.AscDesktopEditor = window.AscDesktopEditor
       if (win && !win.RendererProcessVariable) win.RendererProcessVariable = window.RendererProcessVariable
       patchProtocol(win)
       if (win && win.document) installSelectionListener(win)
+      if (win && win.document) installFileOpenNotice(win)
     } catch (e) {}
     var frames = []
     try { frames = win.frames } catch (e) { return }

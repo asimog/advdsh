@@ -496,9 +496,26 @@ export function apply(ctx) {
     }
   }, 'workspace-editor.events')
 
+  /** Workspace root per live DSH session, learned from session lifecycle events. */
+  const sessionRoots = new Map()
+
+  /**
+   * Record one session's workspace root so a route can confine paths without an
+   * agent tool call in hand.
+   * @param {object} session - a Session with an id and a session header.
+   */
+  function rememberSession(session) {
+    const id = session && typeof session.id === 'string' ? session.id : ''
+    const cwd = session && session.header && typeof session.header.cwd === 'string' ? session.header.cwd : ''
+    if (id !== '' && cwd !== '') sessionRoots.set(id, cwd)
+  }
+  ctx.on('session/created', rememberSession)
+
   /** @param {string | undefined} sessionId - DSH session. @returns {string | undefined} its workspace root. */
   function sessionCwd(sessionId) {
     if (sessionId === undefined) return undefined
+    const known = sessionRoots.get(sessionId)
+    if (typeof known === 'string' && known !== '') return known
     const model = ctx.get('docxModel')
     if (model !== undefined && typeof model.status === 'function') {
       const row = model.status(undefined, sessionId)[0]
@@ -518,7 +535,10 @@ export function apply(ctx) {
     }
   }
   ctx.on('session/disposed', (session) => {
-    if (session && typeof session.id === 'string') void docs.closeOwner(session.id)
+    if (session && typeof session.id === 'string') {
+      sessionRoots.delete(session.id)
+      void docs.closeOwner(session.id)
+    }
   })
 
   /** Pending editor-open requests for one DSH session; read-only, kept until the client confirms. */
@@ -624,7 +644,7 @@ export function apply(ctx) {
   serve('exact', '/api/editor', async (req, res) => {
     try {
       const body = await readJsonBody(req)
-      rejectUnknown(body, ['id', 'modified', 'revision', 'command', 'ok', 'requestId', 'path'])
+      rejectUnknown(body, ['id', 'modified', 'revision', 'command', 'ok', 'requestId', 'changeCount', 'path'])
       if (typeof body.id !== 'string' || body.id === '') throw new DocError('id is required', { status: 400 })
       await assertDocOwner(req, body.id)
       if (typeof body.requestId === 'string') {
@@ -697,6 +717,24 @@ export function apply(ctx) {
       const pdf = await docs.exportPdf(id)
       res.writeHead(200, { 'content-type': 'application/pdf', 'content-disposition': 'inline' })
       res.end(pdf.bytes)
+    } catch (error) {
+      fail(res, error)
+    }
+  })
+
+  /** Read-only markup view of one open document for the tab's inspector pane. */
+  serve('exact', '/api/markup', async (req, res) => {
+    try {
+      const id = requireId(new URL(req.url, 'http://local'))
+      await assertDocOwner(req, id)
+      const model = ctx.get('docxModel')
+      if (model === undefined || typeof model.markupFor !== 'function') {
+        throw new DocError('the document model row is not loaded', { status: 503, code: ERROR_CODES.ENGINE_UNAVAILABLE })
+      }
+      const info = await docs.info(id)
+      const sessionId = sessionIdFromRequest(req)
+      const markup = await model.markupFor(info.path, { cwd: sessionCwd(sessionId), sessionId })
+      sendJson(res, 200, { path: info.path, storeRevision: info.revision, view: markup.view })
     } catch (error) {
       fail(res, error)
     }
