@@ -61,7 +61,7 @@ carry stderr into the log and the caller's error.
 
 The host half owns the document write authority: every agent and editor write
 goes through `ctx.editorDocuments`, the lease and the store. The retired
-whole-file `document_edit` writer is not registered.
+whole-file writer is not registered.
 
 ## Engine half (`lib/engine/`, row `workspace-docx-engine`)
 
@@ -78,7 +78,7 @@ the official sdkjs Word Document Builder from the vendored Lite tree
   `http://127.0.0.1:<port>/engine-rpc` with an `x-engine-token` header. Electron
   child stdin is not used because it is unreliable on Windows.
 - **Requests.** Per-request id, timeout and `AbortSignal`; a timed-out or
-  cancelled request aborts inside the sidecar. A crashed sidecar writes
+  cancelled request is reported to the caller. A crashed sidecar writes
   `crash.log`, marks its sessions lost and restarts (limit 10). `dispose()`
   sends shutdown, then terminates and awaits the exit. `status().ready` is true
   only when the RPC listener accepts requests; `running` is the process range.
@@ -158,8 +158,8 @@ the write gate:
 | `doc_state` | `status`, `revisions`, `reload`, `close`. |
 | `editor` | Editor session control only: `status`, `open`, `save`, `reload`, `export_pdf`, `wait`, `review` commands. |
 
-`doc_edit`, `doc_diff` and `doc_commit` carry replayable `presentCall`/
-`presentResult` diff cards projected from persisted result metadata. Runtime
+`doc_edit`, `doc_diff` and `doc_commit` carry replayable presenter
+cards projected from persisted result metadata. Runtime
 context `document-model:open` (order 130) lists one line per open agent document
 under the agent's cwd: handle, path, revision, base, block count, read mode,
 editor state and pending ops. Unloading the row removes every tool and the
@@ -266,7 +266,7 @@ legal review, under one bundle patch, one ngines.dsh range and one gate.
 - The vendored Lite frontend compiles LESS at runtime, so the first open is
   slower than the release build. Set `WORKSPACE_EDITOR_FRONTEND` to the
   release editors path for a version-matched performance run.
-- The whole-file `document_edit` tool is retired; writes go through `doc_edit`, `doc_commit` and `ctx.editorDocuments`.
+- The whole-file writer is retired; writes go through `doc_edit`, `doc_commit` and `ctx.editorDocuments`.
 - Legal analyzers are structural and textual only: fields, comments, bookmarks and
   tracked-change metadata are not inspected yet.
 - `replace_paragraph` is reliable on a paragraph without revision marks. On a

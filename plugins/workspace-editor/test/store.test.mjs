@@ -1,11 +1,11 @@
-/**
+﻿/**
  * Store contract tests: the mandatory base revision, save-as target checks,
  * backups, retention, the adapter backup/history seam and local history.
  * PDF fixtures avoid x2t so this file stays a unit test.
  */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -63,7 +63,7 @@ test('save-as refuses an existing target and a different file type (WD-005, WD-0
   assert.equal(hash(await readFile(existing)), hash(Buffer.from('B')))
 
   const saved = await store.saveAs(opened.id, Buffer.from('A2'), fresh, { base: opened.revision })
-  assert.equal(saved.path, fresh)
+  assert.equal(saved.path, await realpath(fresh))
   assert.equal(hash(await readFile(fresh)), hash(Buffer.from('A2')))
   await assert.rejects(
     store.saveAs(opened.id, Buffer.from('A3'), wrong, { base: opened.revision }),
@@ -73,7 +73,7 @@ test('save-as refuses an existing target and a different file type (WD-005, WD-0
 
   await store.saveAs(opened.id, Buffer.from('B2'), existing, { base: opened.revision, overwrite: true })
   assert.equal(hash(await readFile(existing)), hash(Buffer.from('B2')))
-  const backups = await names(backupDirectory(root, existing))
+  const backups = await names(backupDirectory(root, await realpath(existing)))
   assert.equal(backups.length, 1)
   assert.equal(backups[0], `${hash(Buffer.from('B'))}.pdf`)
   await store.disposeAll()
@@ -93,7 +93,7 @@ test('each overwrite backs up the previous revision and keeps the newest (WD-091
   const three = await store.applyBytes(file, Buffer.from('D'), { baseRevision: two.revision })
   assert.equal(hash(await readFile(file)), three.revision)
 
-  const directory = backupDirectory(root, file)
+  const directory = backupDirectory(root, await realpath(file))
   assert.deepEqual(await names(directory), [`${one.revision}.pdf`, `${two.revision}.pdf`].sort())
   const backupBytes = await readFile(path.join(directory, `${one.revision}.pdf`))
   assert.equal(hash(backupBytes), one.revision)
@@ -198,5 +198,39 @@ test('a failed adapter write leaves the old bytes and no temporary file', async 
   await assert.rejects(store.applyBytes(file, Buffer.from('B'), { baseRevision: opened.revision }), /write refused/)
   assert.equal(hash(await readFile(file)), opened.revision)
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith('.tmp')), [])
+  await store.disposeAll()
+})
+test('open and save-as refuse a path outside the workspace root (WD-079, WD-080)', async (t) => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'workspace-store-scope-'))
+  t.after(() => rm(base, { recursive: true, force: true }))
+  const root = path.join(base, 'work')
+  const sibling = path.join(base, 'sibling')
+  await mkdir(root)
+  await mkdir(sibling)
+  const inside = path.join(root, 'a.pdf')
+  const outside = path.join(sibling, 'x.pdf')
+  await writeFile(inside, 'A')
+  await writeFile(outside, 'X')
+  const store = createDocStore({ workspaceRoot: root })
+  const opened = await store.open(inside)
+  await assert.rejects(store.open(outside), (error) => error.code === 'DOC_OUTSIDE_WORKSPACE')
+  await assert.rejects(
+    store.saveAs(opened.id, Buffer.from('B'), outside, { base: opened.revision }),
+    (error) => error.code === 'DOC_OUTSIDE_WORKSPACE',
+  )
+  await store.disposeAll()
+})
+test('a state report without a boolean modified field keeps the dirty flag (WD-009)', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'workspace-store-state-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const file = path.join(root, 'a.pdf')
+  await writeFile(file, 'A')
+  const store = createDocStore({ workspaceRoot: root })
+  const opened = await store.open(file)
+  store.setEditorState(opened.id, { modified: true })
+  const afterMissing = store.setEditorState(opened.id, { revision: opened.revision })
+  assert.equal(afterMissing.modified, true)
+  const afterFalse = store.setEditorState(opened.id, { modified: false })
+  assert.equal(afterFalse.modified, false)
   await store.disposeAll()
 })

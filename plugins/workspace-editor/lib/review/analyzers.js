@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Legal document analyzers for `ctx.docxModel.check` and `doc_analyze`.
  *
  * Pure functions over described blocks: no engine, no filesystem. Every finding
@@ -176,8 +176,8 @@ function listLevels({ blocks, checks }) {
 function definedTerms({ blocks, checks }) {
   const findings = []
   const described = blocksOf(blocks)
-  const definitionPattern = /(?:hereinafter|means|\(the\s+["“]|\(["“])/i
-  const quoted = /["“]([A-Z][^"”]{1,60})["”]/g
+  const definitionPattern = /(?:hereinafter|means|\(the\s+["â€œ]|\(["â€œ])/i
+  const quoted = /["â€œ]([A-Z][^"â€]{1,60})["â€]/g
   const definitions = new Map()
   described.forEach((block, index) => {
     const text = textOf(block.text)
@@ -227,8 +227,8 @@ function abbreviations({ blocks, checks, knownAbbreviations }) {
       const start = match.index ?? 0
       const before = text.slice(Math.max(0, start - 2), start)
       const after = text.slice(start + token.length, start + token.length + 2)
-      const introduced = before === '("' || before === '“' || /\(\s*["“]?$/.test(text.slice(Math.max(0, start - 4), start))
-        || after === '")' || after === '”'
+      const introduced = before === '("' || before === 'â€œ' || /\(\s*["â€œ]?$/.test(text.slice(Math.max(0, start - 4), start))
+        || after === '")' || after === 'â€'
       if (introduced) continue
       if (!firstUse.has(token)) firstUse.set(token, { block, index, introduced })
     }
@@ -305,9 +305,11 @@ function citations({ blocks, checks, citationPatterns }) {
   for (const block of described) {
     const text = textOf(block.text)
     for (const pattern of citationPatterns) {
-      const markers = (text.match(new RegExp(pattern.name, 'g')) ?? []).length
+      const flags = pattern.marker.flags.includes('g') ? pattern.marker.flags : `${pattern.marker.flags}g`
+      const markers = (text.match(new RegExp(pattern.marker.source, flags)) ?? []).length
       if (markers === 0) continue
-      const valid = (text.match(pattern.valid) ?? []).length
+      const validFlags = pattern.valid.flags.includes('g') ? pattern.valid.flags : `${pattern.valid.flags}g`
+      const valid = (text.match(new RegExp(pattern.valid.source, validFlags)) ?? []).length
       if (valid >= markers) continue
       if (!wanted(checks, ANALYZER_CODES.CITATION_SHAPE)) continue
       findings.push({

@@ -1,10 +1,10 @@
-/**
+﻿/**
  * `workspace-docx-engine` row: the deterministic document engine behind
  * `ctx.docxEngine`, implemented as a managed hidden-Electron Document Builder
  * sidecar.
  *
  * The sidecar runs the official sdkjs Word Document Builder in the vendored
- * Euro-Office Lite editor page; x2t converts DOCX↔Editor.bin. The manager owns
+ * Euro-Office Lite editor page; x2t converts DOCXâ†”Editor.bin. The manager owns
  * one child process, request ids, per-request timeout/cancel, a crash log and
  * restart, and an awaited exit on dispose. Every method rejects with an
  * `EngineError` carrying a stable `code`; automation never shows a modal dialog.
@@ -13,6 +13,8 @@
  * diff, path resolution, the sidecar host app and the verification harness live
  * there.
  */
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { EngineError, EngineUnavailableError } from './errors.js'
 import { resolveEngineConfig } from './locate.js'
 import { createDocxEngine } from './manager.js'
@@ -38,6 +40,14 @@ export const inject = ['subprocess']
  */
 export function apply(ctx) {
   const config = resolveEngineConfig()
+  const hostFrontend = process.env.WORKSPACE_EDITOR_FRONTEND
+  const frontendProblem = hostFrontend === undefined || hostFrontend === ''
+    ? null
+    : !existsSync(path.join(hostFrontend, 'sdkjs', 'word', 'apiBuilder.js'))
+      ? `frontend mismatch: ${hostFrontend} has no sdkjs/word/apiBuilder.js`
+      : config.eoRoot !== undefined && path.resolve(config.eoRoot) !== path.resolve(hostFrontend)
+        ? `frontend mismatch: host serves ${hostFrontend} but engine uses ${config.eoRoot}`
+        : null
   const engine = createDocxEngine(config, { runtime: ctx.subprocess })
   const missing = config.missing ?? []
   if (missing.length > 0) {
@@ -53,7 +63,10 @@ export function apply(ctx) {
      * @param {{ path?: string, bytes?: Buffer|Uint8Array|ArrayBuffer|string, name?: string }} input - document source.
      * @param {{ author?: string, timeoutMs?: number, signal?: AbortSignal }} [options] - tracked-change author and deadline.
      */
-    open: (input, options) => engine.open(input, options),
+    open: (input, options) => {
+      if (frontendProblem !== null) return Promise.reject(new EngineUnavailableError('open', frontendProblem))
+      return engine.open(input, options)
+    },
     /** @param {string} sessionId - engine session. @param {object} [options] - deadline/cancel. */
     describe: (sessionId, options) => engine.describe(sessionId, options),
     /** @param {string} sessionId - engine session. @param {object} op - curated op. @param {object} [options] - deadline/cancel. */

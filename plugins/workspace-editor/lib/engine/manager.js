@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Managed hidden-Electron Document Builder sidecar behind `ctx.docxEngine`.
  *
  * One child Electron process speaks newline-delimited JSON over stdin/stdout.
@@ -12,13 +12,14 @@
  */
 import { spawn as nodeSpawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFileSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import readline from 'node:readline'
 import { diffBlocks } from './diff.js'
 import { ENGINE_CODES, EngineError } from './errors.js'
 import { engineCodeForSidecar } from '../errors.js'
+import { outlineOf } from '../outline.js'
 
 const PROTOCOL_VERSION = 1
 
@@ -135,21 +136,6 @@ function normalizeBlock(block, index) {
 }
 
 /** Outline rows derived from heading-level paragraphs. */
-function outlineOf(blocks) {
-  const outline = []
-  for (const block of blocks) {
-    if (block.kind !== 'paragraph') continue
-    const style = block.style ?? ''
-    let level = Number.isFinite(block.level) ? block.level : undefined
-    if (level === undefined) {
-      const match = /^heading\s*([1-9])$/i.exec(style)
-      if (match) level = Number(match[1]) - 1
-    }
-    if (level === undefined) continue
-    outline.push({ id: block.id, index: block.index, level, text: block.text })
-  }
-  return outline
-}
 
 export class DocxEngineSidecar {
   /**
@@ -242,6 +228,7 @@ export class DocxEngineSidecar {
     mkdirSync(config.tempRoot, { recursive: true })
     const runTemp = path.join(config.tempRoot, this.runId)
     mkdirSync(runTemp, { recursive: true })
+    this.runTemp = runTemp
     const crashLog = path.join(config.logDir, 'crash.log')
     const args = [
       config.hostDir,
@@ -344,7 +331,6 @@ export class DocxEngineSidecar {
       }
       throw new EngineError(ENGINE_CODES.START_FAILED, `docx engine sidecar failed to start: ${error instanceof Error ? error.message : error}`, { cause: error })
     }
-    this.restartCount = 0
     this.log('info', 'sidecar ready', { pid: handle.pid ?? null, protocol: PROTOCOL_VERSION })
     return handle
   }
@@ -527,7 +513,7 @@ export class DocxEngineSidecar {
       restarts: this.restartCount,
       lastExit: this.lastExit,
       logFile: this.logFile,
-      sessions: Array.from(this.sessions.values()).map((session) => ({
+      sessions: Array.from(this.sessions.values()).filter((session) => session.alive === true).map((session) => ({
         sessionId: session.sessionId,
         name: session.name,
         path: session.path,
@@ -642,6 +628,7 @@ export class DocxEngineSidecar {
       revision: session.revision,
       hash: session.sourceHash,
       blocks,
+      sections: Array.isArray(source.sections) ? source.sections : [],
       outline: outlineOf(blocks),
       paragraphCount: blocks.filter((block) => block.kind === 'paragraph').length,
       tableCount: blocks.filter((block) => block.kind === 'table').length,
@@ -714,9 +701,7 @@ export class DocxEngineSidecar {
     const source = raw && typeof raw === 'object' ? raw : {}
     const bytes = Buffer.from(String(source.docxBase64 ?? ''), 'base64')
     if (bytes.length === 0) throw new EngineError(ENGINE_CODES.SAVE_FAILED, 'engine save returned no DOCX bytes')
-    if (targetPath !== null && targetPath !== undefined) {
-      await this.#writeAtomic(targetPath, bytes)
-    }
+
     session.dirty = false
     session.revision += 1
     session.sourceHash = sha256(bytes)
@@ -730,21 +715,6 @@ export class DocxEngineSidecar {
       sha256: session.sourceHash,
       revision: session.revision,
       editorBinBytes: source.editorBinBytes,
-    }
-  }
-
-  /** Write a file atomically: staging file in the same directory, then rename. */
-  async #writeAtomic(targetPath, bytes) {
-    const directory = path.dirname(targetPath)
-    await mkdir(directory, { recursive: true })
-    const staging = path.join(directory, `.${path.basename(targetPath)}.engine-${process.pid}-${Date.now()}`)
-    await writeFile(staging, bytes)
-    try {
-      if (existsSync(targetPath)) await rm(targetPath, { force: true })
-      await rename(staging, targetPath)
-    } catch (error) {
-      await rm(staging, { force: true }).catch(() => {})
-      throw new EngineError(ENGINE_CODES.SAVE_FAILED, `could not write ${targetPath}: ${error instanceof Error ? error.message : error}`, { cause: error })
     }
   }
 
@@ -817,6 +787,10 @@ export class DocxEngineSidecar {
     this.disposing = (async () => {
       this.log('info', 'disposing engine', { sessions: this.sessions.size, running: this.running })
       await this.#stopProcess()
+      if (typeof this.runTemp === 'string' && this.runTemp !== '') {
+        await rm(this.runTemp, { recursive: true, force: true }).catch(() => {})
+        this.runTemp = undefined
+      }
       this.sessions.clear()
       this.log('info', 'engine disposed', { lastExit: this.lastExit })
     })()

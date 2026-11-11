@@ -1,12 +1,14 @@
-/**
+﻿/**
  * Shared fixtures for the model and tool unit tests: described-document
  * fixtures for the ten specification documents, an in-memory engine with the
  * real request/response shapes (including tracked text, run/markup data,
  * tables, duplicate ids, delayed calls, failure injection and cancellation),
  * and a fake editorDocuments service. No Electron, x2t or DSH context.
  */
+import { createHash } from 'node:crypto'
 import { diffBlocks } from '../lib/engine/diff.js'
 import { createDocxModel } from '../lib/model/model.js'
+import { resolveDocumentPath } from '../lib/scope.js'
 
 export const DOCX = Buffer.from('fake-docx-bytes')
 
@@ -312,7 +314,7 @@ export function createFakeEngine(blocks = initialBlocks(), options = {}) {
         bytes,
         path: saveOptions.targetPath,
         size: bytes.length,
-        sha256: 'saved-hash',
+        sha256: createHash('sha256').update(bytes).digest('hex'),
         revision: ++session.revision,
       }
     },
@@ -575,7 +577,8 @@ export function createFakeDocuments(initial = {}) {
   let serial = 1
   return {
     state,
-    async open(file) {
+    async open(file, options = {}) {
+      if (typeof options.cwd === 'string' && options.cwd !== '') file = await resolveDocumentPath(file, { cwd: options.cwd, roots: options.roots ?? [] })
       state.path = file
       return { id: 'd1', path: file, revision: state.revision, modified: state.modified, edited: false }
     },

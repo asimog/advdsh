@@ -1,10 +1,10 @@
-/**
+﻿/**
  * Verification harness for `ctx.docxModel` (not part of the Cordis row).
  *
  * Proves the model over the real `ctx.docxEngine` and the real `editorDocuments`
- * store on a working copy of the fixture: open → outline/search/context reads →
- * one tracked replace + list item → diff → check → lease-checked commit → OOXML
- * checks → reload → dirty-editor and stale-base refusals → idempotent close.
+ * store on a working copy of the fixture: open â†’ outline/search/context reads â†’
+ * one tracked replace + list item â†’ diff â†’ check â†’ lease-checked commit â†’ OOXML
+ * checks â†’ reload â†’ dirty-editor and stale-base refusals â†’ idempotent close.
  *
  * Run from the repo root:
  *   node plugins/workspace-editor/lib/model/verify.mjs
@@ -172,6 +172,7 @@ async function main() {
     check('check_pending', checked.codes.includes('PENDING_REVISIONS'), checked.codes)
 
     // --- commit through the shared store ------------------------------------
+    await model.diff(handle)
     const committed = await model.commit(handle)
     facts.commit = { revision: committed.revision, size: committed.size, previousRevision: committed.previousRevision }
     check('commit_applied', committed.applied === true)
@@ -210,6 +211,7 @@ async function main() {
     check('parent_has_merged_text', mergedView.matches.length > 0)
     const forkCommit = await model.commit(fork.handle, { force: true }).then(() => null, (error) => error)
     check('fork_cannot_commit', forkCommit !== null && forkCommit.code === MODEL_CODES.FORKED_COMMIT, forkCommit && forkCommit.code)
+    await model.diff(handle)
     const afterMergeCommit = await model.commit(handle)
     check('commit_after_merge', afterMergeCommit.applied === true)
     await model.close(fork.handle)
@@ -230,10 +232,12 @@ async function main() {
     const info = store.list()[0]
     facts.editorDocument = info
     store.setEditorState(info.id, { modified: true })
+    await model.diff(handle)
     const dirty = await model.commit(handle).then(() => null, (error) => error)
     check('commit_refuses_dirty_editor', dirty !== null && dirty.code === MODEL_CODES.EDITOR_DIRTY, dirty && dirty.code)
     store.setEditorState(info.id, { modified: false })
     await writeFile(WORKING, await readFile(SOURCE))
+    await model.diff(handle)
     const stale = await model.commit(handle).then(() => null, (error) => error)
     check('commit_refuses_stale_base', stale !== null && stale.code === MODEL_CODES.STALE_BASE, stale && stale.code)
     const reloaded = await model.reload(handle)
@@ -250,6 +254,7 @@ async function main() {
         blockId: wordTarget.id,
         text: 'DOCMODEL-WORD-CHECK',
       })
+      await model.diff(handle)
       const finalCommit = await model.commit(handle)
       facts.finalCommit = { applied: finalCommit.applied, revision: finalCommit.revision, size: finalCommit.size }
       check('final_commit_for_word', finalCommit.applied === true)
@@ -275,3 +280,4 @@ main().catch(async (error) => {
   console.error(String(error && error.stack || error))
   process.exitCode = 1
 })
+

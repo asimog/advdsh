@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Model-session contract: one record per owner and file, the immutable open
  * facts, the pending op log, the diff-seen marker and commit eligibility.
  * The model keeps the live record; this module owns the public shape so tools,
@@ -57,6 +57,7 @@ export function sessionContract(session, lease) {
   return {
     handle: session.handle,
     ownerSessionId: typeof session.ownerSessionId === 'string' ? session.ownerSessionId : '',
+    cwd: typeof session.cwd === 'string' ? session.cwd : '',
     path: session.path,
     name: session.name,
     contentHash: session.contentHash,

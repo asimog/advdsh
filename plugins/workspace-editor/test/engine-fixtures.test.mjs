@@ -1,10 +1,10 @@
-/**
+﻿/**
  * Real-engine describe contract: the sidecar's live text, tracked runs, table
  * ids, ambiguous targets, expected-text errors and opaque drawing runs.
  * Requires the installed Electron, Euro-Office and x2t used by the verifier.
  */
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -93,5 +93,72 @@ test('the real engine reports ambiguous and stale targets', { timeout: 180000 },
     assert.equal(after.blocks[1].text, 'TWO-A')
     assert.equal(after.blocks[1].deletedText, 'TWO')
     await engine.close(cleanDoc.sessionId)
+  })
+})
+test('the real engine mints stable paragraph ids and never writes a caller target', { timeout: 180000 }, async () => {
+  await withEngine(async ({ directory, engine }) => {
+    const noid = await buildFixture('F-NOID', directory)
+    const opened = await engine.open({ path: noid.path, name: noid.name })
+    const first = await engine.describe(opened.sessionId)
+    assert.equal(first.blocks.length, 5)
+    assert.equal(first.blocks.every((block) => /^w14:[0-9]+$/.test(block.id)), true)
+    const target = path.join(directory, 'must-not-exist.docx')
+    const saved = await engine.save(opened.sessionId, { targetPath: target })
+    assert.ok(saved.bytes.length > 0)
+    await assert.rejects(stat(target), (error) => error.code === 'ENOENT')
+    const reopened = await engine.open({ bytes: saved.bytes, name: noid.name })
+    const second = await engine.describe(reopened.sessionId)
+    assert.deepEqual(second.blocks.map((block) => block.id), first.blocks.map((block) => block.id))
+    await engine.close(reopened.sessionId)
+    await engine.close(opened.sessionId)
+
+    const clean = await buildFixture('F-CLEAN', directory)
+    const tableDoc = await engine.open({ path: clean.path, name: clean.name })
+    await assert.rejects(
+      engine.apply(tableDoc.sessionId, { type: 'insert_table_row', cells: ['A'] }),
+      (error) => error.code === 'ENGINE_TARGET_NOT_FOUND',
+    )
+    const created = await engine.apply(tableDoc.sessionId, { type: 'insert_table_row', cells: ['A', 'B'], create: true })
+    assert.equal(created.facts.tableId !== undefined, true)
+    const tableDescription = await engine.describe(tableDoc.sessionId)
+    assert.equal(tableDescription.tableCount, 1)
+    await engine.close(tableDoc.sessionId)
+  })
+})
+test('the real engine applies run, paragraph, cell and section ops', { timeout: 180000 }, async () => {
+  await withEngine(async ({ directory, engine }) => {
+    const bold = await buildFixture('F-BOLD', directory)
+    const boldDoc = await engine.open({ path: bold.path, name: bold.name })
+    await engine.apply(boldDoc.sessionId, { type: 'set_run_props', blockId: 'w14:1', runIndex: 1, expectedText: 'BOLD', props: { bold: false } })
+    const boldAfter = await engine.describe(boldDoc.sessionId)
+    assert.equal(boldAfter.blocks[0].runs[1].props.bold, false)
+    await engine.apply(boldDoc.sessionId, { type: 'set_run_text', blockId: 'w14:1', runIndex: 1, expectedText: 'BOLD', text: 'BOLDER' })
+    assert.match((await engine.describe(boldDoc.sessionId)).blocks[0].text, /BOLDER/)
+    await engine.close(boldDoc.sessionId)
+
+    const split = await buildFixture('F-SPLIT', directory)
+    const splitDoc = await engine.open({ path: split.path, name: split.name })
+    await engine.apply(splitDoc.sessionId, { type: 'split_run', blockId: 'w14:1', runIndex: 0, expectedText: 'The Agree', offset: 3 })
+    assert.deepEqual((await engine.describe(splitDoc.sessionId)).blocks[0].runs.map((run) => run.text), ['The', ' Agree', 'ment.'])
+    await engine.apply(splitDoc.sessionId, { type: 'merge_runs', blockId: 'w14:1', runIndex: 0, expectedText: 'The' })
+    assert.deepEqual((await engine.describe(splitDoc.sessionId)).blocks[0].runs.map((run) => run.text), ['The Agree', 'ment.'])
+    await engine.close(splitDoc.sessionId)
+
+    const clean = await buildFixture('F-CLEAN', directory)
+    const cleanDoc = await engine.open({ path: clean.path, name: clean.name })
+    await engine.apply(cleanDoc.sessionId, { type: 'set_paragraph_props', blockId: 'w14:1', props: { align: 'center' } })
+    assert.equal((await engine.describe(cleanDoc.sessionId)).blocks[0].props.align, 'center')
+    await engine.apply(cleanDoc.sessionId, { type: 'set_section_props', props: { pageWidth: 15840, pageHeight: 12240, orientation: 'landscape' } })
+    const section = (await engine.describe(cleanDoc.sessionId)).sections[0]
+    assert.equal(section.props.orientation, 'landscape')
+    await engine.close(cleanDoc.sessionId)
+
+    const tables = await buildFixture('F-TABLES', directory)
+    const tableDoc = await engine.open({ path: tables.path, name: tables.name })
+    const tableId = (await engine.describe(tableDoc.sessionId)).blocks.find((block) => block.kind === 'table').id
+    await engine.apply(tableDoc.sessionId, { type: 'set_cell_text', tableBlockId: tableId, rowIndex: 0, columnIndex: 1, expectedText: 'B', text: 'C' })
+    const rows = (await engine.describe(tableDoc.sessionId)).blocks.find((block) => block.kind === 'table').tableRows
+    assert.deepEqual(rows[0], ['A', 'C'])
+    await engine.close(tableDoc.sessionId)
   })
 })

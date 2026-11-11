@@ -4,6 +4,8 @@
  * the replayable presenters.
  */
 import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { apply as applyTools } from '../lib/tools/index.js'
@@ -64,7 +66,7 @@ function withEditorSurface(documents) {
     list: () => [{ id: 'd1', path: PATH, revision: documents.state.revision, modified: false }],
     command: (request) => {
       commands.push(request)
-      return { delivered: 1, command: request.command }
+      return { delivered: 1, command: request.command, executed: true, changeCount: 2 }
     },
     wait: async () => ({ path: PATH, revision: documents.state.revision, changed: false, timedOut: true }),
     exportPdf: async () => ({ path: 'C:/docs/TRO - Motion.pdf', bytes: Buffer.from('pdf') }),
@@ -81,6 +83,7 @@ function boot(options = {}) {
   const contexts = []
   /** @type {Function[]} */
   const disposers = []
+  const services = new Map()
   const ctx = {
     tools: {
       register: (definition) => {
@@ -93,10 +96,12 @@ function boot(options = {}) {
       if (typeof disposer === 'function') disposers.push(disposer)
     },
     systemPrompt: { context: (entry) => { contexts.push(entry) } },
+    provide: (name, value) => { services.set(name, value); return () => services.delete(name) },
+    get: (name) => services.get(name),
     on: () => {},
     docxModel: built.model,
     editorDocuments: documents,
-    docxEngine: { status: () => ({ running: true, ready: true, pid: 1 }) },
+    docxEngine: options.engine ?? { status: () => ({ running: true, ready: true, pid: 1 }) },
   }
   applyTools(ctx)
   return { ...built, ctx, tools, contexts, disposers }
@@ -150,7 +155,7 @@ test('the write gate refuses write review commands but permits display commands'
       (error) => error.code === 'DOC_WRITE_DISABLED',
     )
     assert.equal(booted.documents.commands.length, 0)
-    const display = await run(booted.tools.get('editor'), { action: 'review', doc: 'd1', command: 'displayMode', args: { mode: 'final' } })
+    const display = await run(booted.tools.get('editor'), { action: 'review', doc: 'd1', command: 'displayMode', args: 'final' })
     assert.equal(display.command, 'displayMode')
   } finally {
     if (previous === undefined) delete process.env.WORKSPACE_DOCX_WRITE
@@ -272,10 +277,13 @@ test('the editor tool reports status and dispatches review commands without edit
   const status = await run(booted.tools.get('editor'), { action: 'status' })
   assert.equal(status.engine.ready, true)
   assert.equal(status.documents.length, 1)
-  const review = await run(booted.tools.get('editor'), { action: 'review', doc: 'd1', command: 'accept_all' })
-  assert.equal(review.command, 'accept_all')
+  const review = await run(booted.tools.get('editor'), { action: 'review', doc: 'd1', command: 'acceptAll', userInstruction: 'accept all' })
+  assert.equal(review.command, 'acceptAll')
   assert.equal(booted.documents.commands.length, 1)
-  assert.equal(booted.documents.commands[0].command, 'accept_all')
+  assert.equal(booted.documents.commands[0].command, 'acceptAll')
+  assert.equal(booted.documents.commands[0].awaitAck, true)
+  assert.equal(review.executed, true)
+  assert.equal(review.changeCount, 2)
   const pdf = await run(booted.tools.get('editor'), { action: 'export_pdf', doc: 'd1' })
   assert.equal(pdf.pdf, 'C:/docs/TRO - Motion.pdf')
 })
@@ -318,4 +326,98 @@ test('tool registration is disposed with the row', () => {
   const booted = boot()
   for (const dispose of booted.disposers) dispose()
   assert.equal(booted.tools.size, 0)
+})
+test('doc_open and editor open refuse a path outside the session root (WD-079)', async (t) => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'workspace-tools-scope-'))
+  t.after(() => rm(base, { recursive: true, force: true }))
+  const root = path.join(base, 'work')
+  const sibling = path.join(base, 'sibling')
+  await mkdir(root)
+  await mkdir(sibling)
+  const outside = path.join(sibling, 'X.docx')
+  await writeFile(outside, 'X')
+  const booted = boot({ documents: true })
+  const exec = { agent: { session: { header: { id: 'S1', cwd: root } } }, signal: new AbortController().signal }
+  await assert.rejects(
+    () => booted.tools.get('doc_open').execute({ path: outside }, exec),
+    (error) => error.code === 'DOC_OUTSIDE_WORKSPACE',
+  )
+  await assert.rejects(
+    () => booted.tools.get('editor').execute({ action: 'open', path: outside }, exec),
+    (error) => error.code === 'DOC_OUTSIDE_WORKSPACE',
+  )
+  assert.equal((await run(booted.tools.get('doc_state'), { action: 'status' }, exec)).sessions.length, 0)
+})
+test('handles, status and the runtime context are scoped by DSH session (WD-082, WD-083, WD-084)', async () => {
+  const booted = boot({ documents: true })
+  const one = { agent: { session: { header: { id: 'S1', cwd: path.dirname(PATH) } } } }
+  const two = { agent: { session: { header: { id: 'S2', cwd: path.dirname(PATH) } } } }
+  const first = await booted.tools.get('doc_open').execute({ path: PATH }, one)
+  const second = await booted.tools.get('doc_open').execute({ path: PATH }, two)
+  assert.notEqual(first.handle, second.handle)
+  await assert.rejects(
+    () => booted.tools.get('doc_read').execute({ doc: first.handle, mode: 'full' }, two),
+    (error) => error.code === 'DOC_SESSION_NOT_FOUND',
+  )
+  const status = await booted.tools.get('doc_state').execute({ action: 'status' }, two)
+  assert.deepEqual(status.sessions.map((session) => session.handle), [second.handle])
+  const contextOne = booted.contexts.find((entry) => entry.name === 'document-model:open').text(one)
+  assert.match(contextOne, /FIXTURE|TRO|doc-/, 'the runtime context lists the session document')
+  assert.doesNotMatch(contextOne, new RegExp(second.handle))
+})
+test('editor rejects legacy and unauthorized commands and missing arguments (WD-059, WD-060, WD-063)', async () => {
+  const booted = boot({ documents: true })
+  await assert.rejects(
+    () => booted.tools.get('editor').execute({ action: 'review', doc: 'd1', command: 'accept_all', userInstruction: 'x' }),
+    (error) => error.code === 'DOC_INVALID_ARGS' && error.message === 'DOC_INVALID_ARGS: unknown review command accept_all',
+  )
+  await assert.rejects(
+    () => booted.tools.get('editor').execute({ action: 'review', doc: 'd1', command: 'acceptAll' }),
+    (error) => error.code === 'DOC_REVIEW_NOT_AUTHORIZED',
+  )
+  await assert.rejects(
+    () => booted.tools.get('editor').execute({ action: 'open' }),
+    (error) => error.code === 'DOC_INVALID_ARGS',
+  )
+  assert.equal(booted.documents.commands.length, 0)
+})
+
+test('doc_state close fails for an unknown handle (WD-058)', async () => {
+  const booted = boot({ documents: true })
+  await assert.rejects(
+    () => booted.tools.get('doc_state').execute({ action: 'close', doc: 'doc-missing' }),
+    (error) => error.code === 'DOC_SESSION_NOT_FOUND',
+  )
+})
+
+test('editor status names the four engine states (WD-066)', async () => {
+  const notStarted = boot({ documents: true, engine: { status: () => ({ running: false, ready: false }) } })
+  const status = await run(notStarted.tools.get('editor'), { action: 'status' })
+  assert.equal(status.engine.state, 'not-started')
+  assert.match(notStarted.tools.get('editor').output.render({ action: 'status' }, status)[0].text, /engine not-started/)
+})
+test('only an applier child may edit, and only inside its chunk (WD-116, WD-117, WD-119)', async () => {
+  const booted = boot({ documents: true })
+  const root = { agent: { session: { header: { id: 'root-session', cwd: path.dirname(PATH) } } } }
+  const child = { agent: { session: { header: { id: 'child-1', cwd: path.dirname(PATH) } } } }
+  const rootDoc = await booted.tools.get('doc_open').execute({ path: PATH }, root)
+  const childDoc = await booted.tools.get('doc_open').execute({ path: PATH }, child)
+  const roles = booted.ctx.get('docxRoles')
+  roles.registerApplier('child-1', { blockIds: ['p:2'], changeIds: ['c1'] })
+  await assert.rejects(
+    () => booted.tools.get('doc_edit').execute({ doc: rootDoc.handle, type: 'replace_paragraph', blockId: 'p:2', text: 'X' }, root),
+    (error) => error.code === 'DOC_APPLIER_ONLY',
+  )
+  await assert.rejects(
+    () => booted.tools.get('doc_edit').execute({ doc: childDoc.handle, type: 'replace_paragraph', blockId: 'p:3', text: 'X' }, child),
+    (error) => error.code === 'DOC_OUTSIDE_CHUNK',
+  )
+  const edited = await booted.tools.get('doc_edit').execute({ doc: childDoc.handle, type: 'replace_paragraph', blockId: 'p:2', text: 'X' }, child)
+  assert.equal(edited.pendingOps, 1)
+  await assert.rejects(
+    () => booted.tools.get('doc_read').execute({ doc: rootDoc.handle, mode: 'markup' }, root),
+    (error) => error.code === 'DOC_APPLIER_ONLY',
+  )
+  const markup = await booted.tools.get('doc_read').execute({ doc: childDoc.handle, mode: 'markup' }, child)
+  assert.ok(Array.isArray(markup.nodes))
 })

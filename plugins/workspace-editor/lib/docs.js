@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Document store for the editor plugin: one temp folder per open document, an
  * Editor.bin the editor works on, and DOCX/PDF written back through x2t.
  *
@@ -16,6 +16,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'n
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { ERROR_CODES } from './errors.js'
+import { resolveDocumentPath } from './scope.js'
 import { convert, FORMAT_BIN, FORMAT_DOCX, FORMAT_PDF, X2tError } from './x2t.js'
 
 const EXTENSIONS = { '.docx': 'word', '.doc': 'word', '.pdf': 'pdf' }
@@ -237,7 +238,8 @@ async function writeAtomically(file, bytes) {
 /** Keep one store per plugin activation. */
 export function createDocStore(options = {}) {
   const store = resolveStore(options.store)
-  const workspaceRoot = path.resolve(typeof options.workspaceRoot === 'string' ? options.workspaceRoot : process.cwd())
+  const workspaceRoot = typeof options.workspaceRoot === 'string' ? path.resolve(options.workspaceRoot) : undefined
+  const configuredRoots = Array.isArray(options.allowedRoots) ? options.allowedRoots : []
   const backupRetention = Number.isInteger(options.backupRetention) && options.backupRetention >= 0
     ? options.backupRetention
     : DEFAULT_BACKUP_RETENTION
@@ -269,9 +271,16 @@ export function createDocStore(options = {}) {
     }
   }
 
+  /** @param {string} file - document path. @param {string} [cwd] - session root. @returns {Promise<string>} confined path. */
+  async function confine(file, cwd) {
+    const base = typeof cwd === 'string' && cwd !== '' ? cwd : workspaceRoot
+    if (base === undefined) return path.resolve(file)
+    return resolveDocumentPath(file, { cwd: base, roots: configuredRoots })
+  }
+
   /** @param {string} file - absolute document path. @returns {string} backup directory. */
   function backupDirectory(file) {
-    return path.join(workspaceRoot, '.workspace-editor', 'backups', documentId(file))
+    return path.join(workspaceRoot ?? path.dirname(file), '.workspace-editor', 'backups', documentId(file))
   }
 
   /** @param {string} file - document path. @returns {Promise<{ bytes: Buffer, revision: string } | undefined>} current backup source. */
@@ -364,6 +373,7 @@ export function createDocStore(options = {}) {
       mtimeMs: doc.mtimeMs,
       modified: doc.modified,
       loadedRevision: doc.loadedRevision,
+      ownerSessionId: doc.ownerSessionId ?? '',
     }
   }
 
@@ -399,10 +409,11 @@ export function createDocStore(options = {}) {
    * Open a document: convert DOCX to Editor.bin (PDF opens as-is), then hand
    * the editor its identity and revision.
    * @param {string} file - absolute path to a .docx, .doc or .pdf.
+   * @param {{ cwd?: string }} [openOptions] - session root for confinement.
    * @returns {Promise<object>} the opened document view.
    */
-  async function open(file) {
-    const absolute = path.resolve(file)
+  async function open(file, openOptions = {}) {
+    const absolute = await confine(file, openOptions.cwd)
     const kind = EXTENSIONS[path.extname(absolute).toLowerCase()]
     if (kind === undefined) throw new DocError(`unsupported document type: ${path.extname(absolute)}`, { status: 400 })
     const current = await statOr404(store, absolute)
@@ -431,6 +442,7 @@ export function createDocStore(options = {}) {
       mtimeMs: current.mtimeMs,
       modified: false,
       loadedRevision: current.revision,
+      ownerSessionId: typeof openOptions.sessionId === 'string' ? openOptions.sessionId : '',
     }
     if (kind === 'word') {
       doc.binPath = await docxToBin(absolute, tempDir)
@@ -488,7 +500,7 @@ export function createDocStore(options = {}) {
    * @returns {Promise<object>} path, new revision and the document view when the tab is open.
    */
   async function applyBytes(file, bytes, writeOptions = {}) {
-    const absolute = path.resolve(file)
+    const absolute = await confine(file, writeOptions.cwd)
     const base = requiredBase(writeOptions.baseRevision)
     const doc = byPath.get(pathKey(absolute))
     if (doc !== undefined) {
@@ -616,7 +628,7 @@ export function createDocStore(options = {}) {
   async function saveAs(id, content, target, saveOptions = {}) {
     const doc = get(id)
     await refresh(doc)
-    const absolute = path.resolve(target)
+    const absolute = await confine(target, saveOptions.cwd)
     if (path.extname(absolute).toLowerCase() !== path.extname(doc.path).toLowerCase()) {
       throw storeError(`save-as target must keep the ${path.extname(doc.path)} type`, ERROR_CODES.INVALID_TARGET, 400)
     }
@@ -649,12 +661,12 @@ export function createDocStore(options = {}) {
    */
   function setEditorState(id, patch) {
     const doc = get(id)
-    const modified = patch.modified === true
+    const nextModified = typeof patch.modified === 'boolean' ? patch.modified : doc.modified
     const loadedRevision = typeof patch.revision === 'string' && patch.revision !== ''
       ? patch.revision
       : doc.loadedRevision
-    const changed = doc.modified !== modified || doc.loadedRevision !== loadedRevision
-    doc.modified = modified
+    const changed = doc.modified !== nextModified || doc.loadedRevision !== loadedRevision
+    doc.modified = nextModified
     doc.loadedRevision = loadedRevision
     if (typeof patch.command === 'string') doc.lastCommand = patch.command
     if (changed || patch.command !== undefined) {
@@ -764,6 +776,13 @@ export function createDocStore(options = {}) {
     await rm(doc.tempDir, { recursive: true, force: true }).catch(() => {})
   }
 
+  /** Close every editor document opened by one disposed DSH session. @param {string} ownerSessionId - DSH session. */
+  async function closeOwner(ownerSessionId) {
+    for (const doc of [...docs.values()]) {
+      if (doc.ownerSessionId === ownerSessionId) await close(doc.id)
+    }
+  }
+
   /** Forget every document, waiter and timer (plugin disposal). */
   async function disposeAll() {
     disposed = true
@@ -795,6 +814,7 @@ export function createDocStore(options = {}) {
     wait,
     exportPdf,
     close,
+    closeOwner,
     disposeAll,
   }
 }

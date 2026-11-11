@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Host half of the workspace editor plugin.
  *
  * Serves the Euro-Office frontend and one host page from this origin, keeps a
@@ -10,12 +10,14 @@
  * command frames. All document writes go through `ctx.editorDocuments`; the
  * retired whole-file `document_edit` writer is not registered.
  */
+import { randomUUID } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDocStore, DocError } from './docs.js'
 import { repoRoot, X2tError } from './x2t.js'
 import { ERROR_CODES, routeErrorBody, statusFor } from './errors.js'
+import { sessionIdFromRequest } from './scope.js'
 
 export const name = 'workspace-editor'
 export const inject = ['webServer', 'tools']
@@ -124,7 +126,19 @@ async function readBody(req, limit = 512 * 1024 * 1024) {
 
 async function readJsonBody(req) {
   const body = await readBody(req, 1024 * 1024)
-  return body.length === 0 ? {} : JSON.parse(body.toString('utf8'))
+  if (body.length === 0) return {}
+  try {
+    return JSON.parse(body.toString('utf8'))
+  } catch (error) {
+    throw new DocError('invalid JSON body', { status: 400, code: ERROR_CODES.INVALID_ARGS })
+  }
+}
+
+/** Refuse a JSON body with a field the route does not read. */
+function rejectUnknown(body, allowed) {
+  for (const key of Object.keys(body)) {
+    if (!allowed.includes(key)) throw new DocError(`unknown field: ${key}`, { status: 400, code: ERROR_CODES.INVALID_ARGS })
+  }
 }
 
 function requireId(url) {
@@ -160,8 +174,8 @@ async function loadFontAllowlist() {
  * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
  */
 export function apply(ctx) {
-  /** Open SSE responses; the events route adds them and disposal force-closes them. */
-  const connections = new Set()
+  /** Open SSE responses and the DSH session each connection belongs to. */
+  const connections = new Map()
   /** The composition's trust fence, optional in headless harness runs. */
   const trust = ctx.get('connection')
   /** @type {ReturnType<typeof createDocStore>} */
@@ -170,13 +184,28 @@ export function apply(ctx) {
   /** Write one frame to every live SSE client. @param {object} frame - frame payload. */
   function broadcast(frame) {
     const line = sseData(frame)
-    for (const res of connections) {
+    const framePath = typeof frame.path === 'string'
+      ? frame.path
+      : (frame.document && typeof frame.document.path === 'string' ? frame.document.path : '')
+    for (const [res, sessionId] of connections) {
+      if (sessionId !== undefined && framePath !== '' && !ownsPath(sessionId, framePath)) continue
       try {
         res.write(line)
       } catch {
         // A closing client is removed by its own close handler; the frame is lost for it.
       }
     }
+  }
+
+  /** @param {string} sessionId - DSH session. @param {string} file - document path. @returns {boolean} owned. */
+  function ownsPath(sessionId, file) {
+    const key = path.resolve(file).toLowerCase()
+    const model = ctx.get('docxModel')
+    if (model !== undefined && typeof model.status === 'function') {
+      const owned = model.status(undefined, sessionId).some((session) => path.resolve(session.path).toLowerCase() === key)
+      if (owned) return true
+    }
+    return docs.list().some((document) => document.ownerSessionId === sessionId && path.resolve(document.path).toLowerCase() === key)
   }
 
   /** Emit a Cordis fact the future document model consumes; a missing listener is legal. */
@@ -220,6 +249,8 @@ export function apply(ctx) {
 
   docs = createDocStore({
     store: ctx.get('editorDocumentsStore'),
+    workspaceRoot: ctx.get('workspaceRoot') ?? process.cwd(),
+    allowedRoots: (process.env.WORKSPACE_DOCX_ALLOWED_ROOTS ?? '').split(path.delimiter).filter(Boolean),
     onEvent: (event) => {
       if (event.type === 'document') {
         broadcast({
@@ -259,15 +290,28 @@ export function apply(ctx) {
    * `POST /api/editor`.
    * @param {{ id?: string, path?: string, command: string, args?: unknown }} request - command request.
    */
+  /** Pending editor-open requests per DSH session. */
+  const pendingOpens = new Map()
+  /** Command request ids waiting for a host-page acknowledgement. */
+  const commandWaiters = new Map()
   function dispatchCommand(request) {
-    broadcast({ type: 'command', id: request.id, path: request.path, command: request.command, args: request.args })
-    return { delivered: connections.size, command: request.command }
+    const requestId = randomUUID()
+    broadcast({ type: 'command', id: request.id, requestId, path: request.path, command: request.command, args: request.args })
+    const delivered = connections.size
+    if (request.awaitAck !== true) return { delivered, command: request.command, executed: delivered > 0 }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        commandWaiters.delete(requestId)
+        resolve({ delivered, command: request.command, executed: false, timedOut: true })
+      }, 10000)
+      commandWaiters.set(requestId, { resolve, timer, delivered, command: request.command })
+    })
   }
 
   /** The service consumed by the document model and agent tool rows. */
   const editorDocuments = {
     /** @param {string} file - document path. */
-    open: (file) => docs.open(file),
+    open: (file, options) => docs.open(file, options),
     /** @param {string} id - document id. */
     info: (id) => docs.info(id),
     /** @returns {object[]} open document views. */
@@ -280,6 +324,7 @@ export function apply(ctx) {
     save: (id, bytes, options) => docs.save(id, bytes, options),
     /** @param {string} id - document id. @param {Uint8Array} bytes - editor bytes. @param {string} target - destination. @param {object} [options] - base revision. */
     saveAs: (id, bytes, target, options) => docs.saveAs(id, bytes, target, options),
+    history: (id) => docs.history(id),
     /** @param {string} id - document id. @param {object} patch - editor report. */
     setEditorState: (id, patch) => docs.setEditorState(id, patch),
     /** @param {string} target - document id or path. @param {object} [options] - baseline revision and deadline. */
@@ -290,9 +335,18 @@ export function apply(ctx) {
     close: (id) => docs.close(id),
     /** @param {object} request - review command request. */
     command: (request) => dispatchCommand(request),
+    requestOpen: (sessionId, file) => {
+      if (typeof sessionId !== 'string' || sessionId === '' || typeof file !== 'string' || file === '') return { queued: false }
+      const list = pendingOpens.get(sessionId) ?? []
+      list.push(file)
+      pendingOpens.set(sessionId, list)
+      return { queued: true }
+    },
   }
   ctx.effect(() => ctx.provide('editorDocuments', editorDocuments), 'workspace-editor.editorDocuments')
 
+  /** Routes that mutate state; every other route is read-only. */
+  const POST_ROUTES = new Set(['/api/open', '/api/save', '/api/save-as', '/api/close', '/api/editor', '/api/command'])
   /** Register one route behind the trust fence. */
   const serve = (kind, suffix, handler) => ctx.effect(
     () => ctx.webServer.register({
@@ -300,6 +354,11 @@ export function apply(ctx) {
       path: `${ROUTE}${suffix}`,
       handler: (req, res) => {
         if (rejected(req, res)) return
+        const post = POST_ROUTES.has(suffix)
+        if ((post && req.method !== 'POST') || (!post && req.method !== 'GET' && req.method !== 'HEAD')) {
+          sendJson(res, 405, { error: 'method not allowed', code: ERROR_CODES.INVALID_ARGS })
+          return
+        }
         return handler(req, res)
       },
     }),
@@ -309,6 +368,7 @@ export function apply(ctx) {
   // --- host page and frontend -------------------------------------------------
   serve('exact', '/host.html', async (_req, res) => {
     try {
+      res.setHeader('content-security-policy', "default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; child-src 'self' blob:")
       await serveFile(res, path.join(editorDir, 'host.html'))
     } catch (error) {
       log(`host page failed: ${error instanceof Error ? error.message : error}`)
@@ -368,8 +428,9 @@ export function apply(ctx) {
           'x-accel-buffering': 'no',
         })
         res.write(': connected\n\n')
-        res.write(sseData({ type: 'snapshot', documents: docs.list() }))
-        connections.add(res)
+        const sessionId = sessionIdFromRequest(req)
+        res.write(sseData({ type: 'snapshot', documents: docs.list().filter((document) => sessionId === undefined || !document.ownerSessionId || document.ownerSessionId === sessionId) }))
+        connections.set(res, sessionId)
         const heartbeat = setInterval(() => {
           try {
             res.write(': ping\n\n')
@@ -388,17 +449,53 @@ export function apply(ctx) {
     })
     return () => {
       disposeRoute()
-      for (const res of connections) res.destroy()
+      for (const res of connections.keys()) res.destroy()
       connections.clear()
     }
   }, 'workspace-editor.events')
 
+  /** @param {string | undefined} sessionId - DSH session. @returns {string | undefined} its workspace root. */
+  function sessionCwd(sessionId) {
+    if (sessionId === undefined) return undefined
+    const model = ctx.get('docxModel')
+    if (model === undefined || typeof model.status !== 'function') return undefined
+    const row = model.status(undefined, sessionId)[0]
+    return row && typeof row.cwd === 'string' && row.cwd !== '' ? row.cwd : undefined
+  }
+
+  /** Refuse a document id that does not belong to the request's DSH session. */
+  async function assertDocOwner(req, id) {
+    const sessionId = sessionIdFromRequest(req)
+    if (sessionId === undefined) return
+    const view = await docs.info(id)
+    if (!ownsPath(sessionId, view.path)) {
+      throw new DocError('document not found in this session', { status: 404, code: ERROR_CODES.SESSION_NOT_FOUND })
+    }
+  }
+  ctx.on('session/disposed', (session) => {
+    if (session && typeof session.id === 'string') void docs.closeOwner(session.id)
+  })
+
+  /** Pending editor-open requests for one DSH session; consumed by the client. */
+  serve('exact', '/api/pending-open', async (req, res) => {
+    try {
+      const sessionId = sessionIdFromRequest(req)
+      if (sessionId === undefined) throw new DocError('session is required', { status: 400, code: ERROR_CODES.INVALID_ARGS })
+      const paths = pendingOpens.get(sessionId) ?? []
+      pendingOpens.delete(sessionId)
+      sendJson(res, 200, { paths })
+    } catch (error) {
+      fail(res, error)
+    }
+  })
   // --- document lifecycle -----------------------------------------------------
   serve('exact', '/api/open', async (req, res) => {
     try {
       const body = await readJsonBody(req)
+      rejectUnknown(body, ['path'])
       if (typeof body.path !== 'string' || body.path === '') throw new DocError('path is required', { status: 400 })
-      sendJson(res, 200, await docs.open(body.path))
+      const sessionId = sessionIdFromRequest(req)
+      sendJson(res, 200, await docs.open(body.path, { cwd: sessionCwd(sessionId), sessionId }))
     } catch (error) {
       fail(res, error)
     }
@@ -406,7 +503,9 @@ export function apply(ctx) {
 
   serve('exact', '/api/info', async (req, res) => {
     try {
-      sendJson(res, 200, await docs.info(requireId(new URL(req.url, 'http://local'))))
+      const id = requireId(new URL(req.url, 'http://local'))
+      await assertDocOwner(req, id)
+      sendJson(res, 200, await docs.info(id))
     } catch (error) {
       fail(res, error)
     }
@@ -414,7 +513,9 @@ export function apply(ctx) {
 
   serve('exact', '/api/bin', async (req, res) => {
     try {
-      const opened = await docs.readBytes(requireId(new URL(req.url, 'http://local')))
+      const id = requireId(new URL(req.url, 'http://local'))
+      await assertDocOwner(req, id)
+      const opened = await docs.readBytes(id)
       res.writeHead(200, {
         'content-type': 'application/octet-stream',
         'cache-control': 'no-store',
@@ -430,6 +531,7 @@ export function apply(ctx) {
     try {
       const url = new URL(req.url, 'http://local')
       const id = requireId(url)
+      await assertDocOwner(req, id)
       const bytes = await readBody(req)
       const saved = await docs.save(id, bytes, { base: baseOf(url, req) })
       log(`saved ${path.basename(saved.path)} revision ${saved.revision.slice(0, 12)} (${bytes.length} bytes)`)
@@ -443,12 +545,14 @@ export function apply(ctx) {
     try {
       const url = new URL(req.url, 'http://local')
       const id = requireId(url)
+      await assertDocOwner(req, id)
       const target = url.searchParams.get('path')
       if (target === null || target === '') throw new DocError('path is required', { status: 400 })
       const bytes = await readBody(req)
       const saved = await docs.saveAs(id, bytes, target, {
         base: baseOf(url, req),
         overwrite: url.searchParams.get('overwrite') === 'true',
+        cwd: sessionCwd(sessionIdFromRequest(req)),
       })
       log(`saved as ${saved.path} revision ${saved.revision.slice(0, 12)}`)
       sendJson(res, 200, saved)
@@ -464,7 +568,22 @@ export function apply(ctx) {
   serve('exact', '/api/editor', async (req, res) => {
     try {
       const body = await readJsonBody(req)
+      rejectUnknown(body, ['id', 'modified', 'revision', 'command', 'ok', 'requestId', 'path'])
       if (typeof body.id !== 'string' || body.id === '') throw new DocError('id is required', { status: 400 })
+      await assertDocOwner(req, body.id)
+      if (typeof body.requestId === 'string') {
+        const waiter = commandWaiters.get(body.requestId)
+        if (waiter !== undefined) {
+          clearTimeout(waiter.timer)
+          commandWaiters.delete(body.requestId)
+          waiter.resolve({
+            delivered: waiter.delivered,
+            command: waiter.command,
+            executed: body.ok !== false,
+            changeCount: Number.isInteger(body.changeCount) ? body.changeCount : 0,
+          })
+        }
+      }
       sendJson(res, 200, docs.setEditorState(body.id, {
         modified: body.modified,
         revision: body.revision,
@@ -485,9 +604,9 @@ export function apply(ctx) {
         throw new DocError(`unknown editor command: ${command === '' ? '(missing)' : command}`, { status: 400 })
       }
       const id = typeof body.id === 'string' && body.id !== '' ? body.id : undefined
-      if (id !== undefined) await docs.info(id)
+      if (id !== undefined) { await assertDocOwner(req, id); await docs.info(id) }
       const target = typeof body.path === 'string' && body.path !== '' ? body.path : undefined
-      sendJson(res, 200, dispatchCommand({ id, path: target, command, args: body.args }))
+      sendJson(res, 200, await dispatchCommand({ id, path: target, command, args: body.args, awaitAck: body.awaitAck === true }))
     } catch (error) {
       fail(res, error)
     }
@@ -496,6 +615,7 @@ export function apply(ctx) {
   serve('exact', '/api/modified', async (req, res) => {
     try {
       const id = requireId(new URL(req.url, 'http://local'))
+      await assertDocOwner(req, id)
       const body = await readJsonBody(req)
       sendJson(res, 200, docs.setEditorState(id, { modified: body.modified === true }))
     } catch (error) {
@@ -507,7 +627,7 @@ export function apply(ctx) {
   serve('exact', '/api/close', async (req, res) => {
     try {
       const id = new URL(req.url, 'http://local').searchParams.get('id') ?? ''
-      if (id !== '') await docs.close(id)
+      if (id !== '') { await assertDocOwner(req, id); await docs.close(id) }
       sendJson(res, 200, { closed: id })
     } catch (error) {
       fail(res, error)
@@ -516,7 +636,9 @@ export function apply(ctx) {
 
   serve('exact', '/api/pdf', async (req, res) => {
     try {
-      const pdf = await docs.exportPdf(requireId(new URL(req.url, 'http://local')))
+      const id = requireId(new URL(req.url, 'http://local'))
+      await assertDocOwner(req, id)
+      const pdf = await docs.exportPdf(id)
       res.writeHead(200, { 'content-type': 'application/pdf', 'content-disposition': 'inline' })
       res.end(pdf.bytes)
     } catch (error) {
@@ -577,7 +699,13 @@ export function apply(ctx) {
       sendJson(res, 500, { ...body, code: ERROR_CODES.COMMIT_FAILED, stderr: error.stderr.slice(0, 4000) })
       return
     }
+    if (error && typeof error.code === 'string' && error.code.startsWith('DOC_')) {
+      sendJson(res, statusFor(error.code, 500), body)
+      return
+    }
     log(`route failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
     sendJson(res, 500, body)
   }
 }
+
+

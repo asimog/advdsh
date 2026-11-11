@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `workspace-docx-tools` row: the agent-facing `doc_*` tools, the
  * `document-model:open` runtime context and the read/write env gate.
  *
@@ -11,7 +11,9 @@
  * model also enforces the gate, so a gated write fails with `DOC_WRITE_DISABLED`
  * instead of disappearing from one surface only.
  */
+import path from 'node:path'
 import { ERROR_CODES, WorkspaceError, formatToolError } from '../errors.js'
+import { createRoleRegistry } from '../roles.js'
 
 export const name = 'workspace-docx-tools'
 export const inject = ['tools', 'docxModel', 'editorDocuments', 'systemPrompt']
@@ -20,19 +22,37 @@ export const inject = ['tools', 'docxModel', 'editorDocuments', 'systemPrompt']
 const CONTEXT_ORDER = 130
 
 /** Review commands that change tracked text and therefore need the write gate. */
-const WRITE_REVIEW_COMMANDS = new Set([
-  'accept_all', 'reject_all', 'accept_selection', 'reject_selection',
-  'acceptAll', 'rejectAll', 'acceptSelection', 'rejectSelection',
-])
+const WRITE_REVIEW_COMMANDS = new Set(['acceptAll', 'rejectAll', 'acceptSelection', 'rejectSelection'])
+const REVIEW_COMMANDS = new Set([...WRITE_REVIEW_COMMANDS, 'nextChange', 'prevChange', 'displayMode', 'trackChanges'])
 
 /**
  * Register every tool, the runtime context and the lifecycle hooks.
  * @param {import('@deepseek-ai/cordis').Context} ctx - the row's Cordis context.
  */
 export function apply(ctx) {
+  const roles = createRoleRegistry()
+  ctx.effect(() => {
+    ctx.provide('docxRoles', roles)
+    return () => roles.clear()
+  }, 'workspace-docx-tools.roles')
   const model = ctx.docxModel
   const documents = ctx.editorDocuments
   const writeEnabled = process.env.WORKSPACE_DOCX_WRITE !== 'off'
+
+  /** Refuse an edit or markup read by a caller that is not an applier child. */
+  const requireApplier = (exec, args, markupOnly = false) => {
+    if (!roles.isEnforced()) return
+    const caller = sessionIdOf(exec)
+    if (!roles.isApplier(caller)) {
+      throw new WorkspaceError(ERROR_CODES.APPLIER_ONLY, 'only an applier child may use this operation')
+    }
+    if (markupOnly) return
+    const chunk = roles.chunk(caller)
+    const target = args.blockId ?? args.tableBlockId
+    if (chunk !== undefined && typeof target === 'string' && !chunk.has(target)) {
+      throw new WorkspaceError(ERROR_CODES.OUTSIDE_CHUNK, `block ${target} is outside the task chunk`)
+    }
+  }
 
   /**
    * Register one tool as an effect. The wrapper gives every rejection the
@@ -43,6 +63,15 @@ export function apply(ctx) {
     ...definition,
     execute: async (args, exec) => {
       try {
+        if (definition.name === 'doc_edit') requireApplier(exec, args)
+        if (definition.name === 'doc_read' && args.mode === 'markup') requireApplier(exec, args, true)
+        if (definition.name.startsWith('doc_') && definition.name !== 'doc_open' && typeof args.doc === 'string') {
+          const contract = model.contract(args.doc)
+          const caller = sessionIdOf(exec)
+          if (caller !== undefined && contract.ownerSessionId !== '' && contract.ownerSessionId !== caller) {
+            throw new WorkspaceError(ERROR_CODES.SESSION_NOT_FOUND, 'the document handle belongs to another session')
+          }
+        }
         return await definition.execute(args, exec)
       } catch (error) {
         throw formatToolError(error)
@@ -74,6 +103,21 @@ export function apply(ctx) {
     }
   }
 
+  /** The DSH session ID of the calling agent. @param {object} exec - tool execution facts. */
+  const sessionIdOf = (exec) => {
+    try {
+      const id = exec && exec.agent && exec.agent.session && exec.agent.session.header
+        ? exec.agent.session.header.id
+        : undefined
+      return typeof id === 'string' && id !== '' ? id : undefined
+    } catch (error) {
+      return undefined
+    }
+  }
+
+  /** Configured allowed roots for path confinement. @returns {string[]} roots. */
+  const rootsOf = () => (process.env.WORKSPACE_DOCX_ALLOWED_ROOTS ?? '').split(path.delimiter).filter(Boolean)
+
   // --- doc_open --------------------------------------------------------------
   tool({
     name: 'doc_open',
@@ -96,7 +140,7 @@ export function apply(ctx) {
           path: { type: 'string' },
           name: { type: 'string' },
           contentHash: { type: 'string' },
-          revision: { type: 'number' },
+          pendingOps: { type: 'number' },
           baseRevision: { type: 'string' },
           readMode: { type: 'string' },
           blocks: { type: 'number' },
@@ -118,23 +162,28 @@ export function apply(ctx) {
             },
           },
         },
-        required: ['handle', 'path', 'name', 'contentHash', 'revision', 'baseRevision', 'readMode', 'blocks', 'paragraphs', 'tables', 'tokens', 'outline'],
+        required: ['handle', 'path', 'name', 'contentHash', 'pendingOps', 'baseRevision', 'readMode', 'blocks', 'paragraphs', 'tables', 'tokens', 'outline'],
         additionalProperties: false,
       },
       render: (_args, value) => [{
         type: 'text',
         text: `opened ${value.name} (${value.blocks} blocks, ${value.paragraphs} paragraphs, read=${value.readMode})\n`
-          + `doc=${value.handle} path=${value.path} revision=${value.revision} base=${value.baseRevision.slice(0, 12)}`,
+          + `doc=${value.handle} path=${value.path} pending=${value.pendingOps} base=${value.baseRevision.slice(0, 12)}`,
       }],
     },
     async execute(args, exec) {
-      const opened = await model.open(args.path, { author: authorOf(exec) })
+      const opened = await model.open(args.path, {
+        author: authorOf(exec),
+        sessionId: sessionIdOf(exec),
+        cwd: cwdOf(exec),
+        roots: rootsOf(),
+      })
       return {
         handle: opened.handle,
         path: opened.path,
         name: opened.name,
         contentHash: opened.contentHash,
-        revision: opened.revision,
+        pendingOps: 0,
         baseRevision: opened.baseRevision,
         readMode: opened.readMode,
         blocks: opened.blocks,
@@ -157,7 +206,7 @@ export function apply(ctx) {
       type: 'object',
       properties: {
         doc: { type: 'string', description: 'Session handle from doc_open.' },
-        mode: { type: 'string', enum: ['auto', 'full', 'outline', 'range', 'search', 'context'], description: 'Read mode; defaults to auto.' },
+        mode: { type: 'string', enum: ['auto', 'full', 'outline', 'range', 'search', 'context', 'markup'], description: 'Read mode; defaults to auto.' },
         from: { type: 'number', description: 'First block index for range.' },
         to: { type: 'number', description: 'Last block index for range.' },
         ids: { type: 'array', items: { type: 'string' }, description: 'Block ids for range.' },
@@ -168,6 +217,8 @@ export function apply(ctx) {
         index: { type: 'number', description: 'Focus block index for context.' },
         before: { type: 'number', description: 'Blocks before the focus for context.' },
         after: { type: 'number', description: 'Blocks after the focus for context.' },
+        limitNodes: { type: 'number', description: 'Maximum markup nodes.' },
+        limitTokens: { type: 'number', description: 'Maximum markup tokens.' },
       },
       required: ['doc'],
       additionalProperties: false,
@@ -216,6 +267,8 @@ export function apply(ctx) {
               additionalProperties: false,
             },
           },
+          nodes: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          next: { oneOf: [{ type: 'number' }, { type: 'null' }] },
           outline: {
             type: 'array',
             items: {
@@ -252,6 +305,8 @@ export function apply(ctx) {
         index: args.index,
         before: args.before,
         after: args.after,
+        limitNodes: args.limitNodes,
+        limitTokens: args.limitTokens,
       })
       return {
         doc: read.handle,
@@ -266,6 +321,8 @@ export function apply(ctx) {
         blocks: read.blocks ?? [],
         matches: read.matches ?? [],
         outline: read.outline ?? [],
+        nodes: read.nodes ?? [],
+        next: read.next ?? null,
       }
     },
   })
@@ -356,7 +413,9 @@ export function apply(ctx) {
           doc: { type: 'string' },
           path: { type: 'string' },
           changed: { type: 'boolean' },
-          revision: { type: 'number' },
+          pendingOps: { type: 'number' },
+          blocksChanged: { type: 'number' },
+          blocksTotal: { type: 'number' },
           baseRevision: { type: 'string' },
           changes: {
             type: 'array',
@@ -386,7 +445,7 @@ export function apply(ctx) {
             additionalProperties: false,
           },
         },
-        required: ['doc', 'path', 'changed', 'revision', 'baseRevision', 'changes', 'counts'],
+        required: ['doc', 'path', 'changed', 'pendingOps', 'blocksChanged', 'blocksTotal', 'baseRevision', 'changes', 'counts'],
         additionalProperties: false,
       },
       render: (_args, value) => [{
@@ -410,7 +469,9 @@ export function apply(ctx) {
         doc: diff.handle,
         path: diff.path,
         changed: diff.changed,
-        revision: diff.revision,
+        pendingOps: diff.pendingOps,
+        blocksChanged: diff.blocksChanged,
+        blocksTotal: diff.blocksTotal,
         baseRevision: diff.baseRevision,
         changes: diff.changes,
         counts: diff.counts,
@@ -503,28 +564,28 @@ export function apply(ctx) {
             path: { type: 'string' },
             applied: { type: 'boolean' },
             changed: { type: 'boolean' },
-            revision: { type: 'string' },
+            storeRevision: { type: 'string' },
             previousRevision: { type: 'string' },
             size: { type: 'number' },
             sha256: { type: 'string' },
           },
-          required: ['doc', 'path', 'applied', 'changed', 'revision'],
+          required: ['doc', 'path', 'applied', 'changed', 'storeRevision'],
           additionalProperties: false,
         },
         render: (_args, value) => [{
           type: 'text',
           text: value.applied
-            ? `committed ${value.path} ${value.size} bytes revision ${String(value.revision).slice(0, 12)}`
+            ? `committed ${value.path} ${value.size} bytes storeRevision ${String(value.storeRevision).slice(0, 12)}`
             : `no pending edits in ${value.path}`,
         }],
-        presentationMeta: (_args, value) => ({ path: value.path, applied: value.applied, revision: value.revision, size: value.size }),
+        presentationMeta: (_args, value) => ({ path: value.path, applied: value.applied, storeRevision: value.storeRevision, size: value.size }),
       },
       presentResult: (_args, result) => {
         const meta = result?.meta ?? {}
         return {
           card: 'generic',
           title: meta.applied ? `Committed ${meta.path ?? 'document'}` : 'No pending edits',
-          content: meta.applied ? `revision ${String(meta.revision ?? '').slice(0, 12)}${Number.isFinite(meta.size) ? ` · ${meta.size} bytes` : ''}` : undefined,
+          content: meta.applied ? `revision ${String(meta.revision ?? '').slice(0, 12)}${Number.isFinite(meta.size) ? ` Â· ${meta.size} bytes` : ''}` : undefined,
         }
       },
       async execute(args) {
@@ -534,7 +595,7 @@ export function apply(ctx) {
           path: committed.path,
           applied: committed.applied === true,
           changed: committed.changed === true,
-          revision: String(committed.revision ?? ''),
+          storeRevision: String(committed.revision ?? ''),
           ...(typeof committed.previousRevision === 'string' ? { previousRevision: committed.previousRevision } : {}),
           ...(Number.isFinite(committed.size) ? { size: committed.size } : {}),
           ...(typeof committed.sha256 === 'string' ? { sha256: committed.sha256 } : {}),
@@ -555,7 +616,7 @@ export function apply(ctx) {
           doc: { type: 'string', description: 'Session handle from doc_open.' },
           type: {
             type: 'string',
-            enum: ['replace_paragraph', 'insert_paragraph', 'delete_paragraph', 'insert_list_item', 'insert_table_row', 'delete_table_row'],
+            enum: ['replace_paragraph', 'insert_paragraph', 'delete_paragraph', 'insert_list_item', 'insert_table_row', 'delete_table_row', 'set_run_props', 'set_run_text', 'split_run', 'merge_runs', 'set_paragraph_props', 'set_cell_text', 'insert_table_column', 'delete_table_column', 'set_section_props', 'replace_text'],
             description: 'Operation type.',
           },
           blockId: { type: 'string', description: 'Target block id.' },
@@ -568,7 +629,15 @@ export function apply(ctx) {
           tableIndex: { type: 'number', description: 'Table block index for insert_table_row.' },
           cells: { type: 'array', items: { type: 'string' }, description: 'Cell texts for insert_table_row.' },
           create: { type: 'boolean', description: 'Create a table when none exists for insert_table_row.' },
-          rowIndex: { type: 'number', description: 'Row to delete for delete_table_row; defaults to the last.' },
+          rowIndex: { type: 'number', description: 'Row index for table row/cell operations.' },
+          columnIndex: { type: 'number', description: 'Column index for table cell/column operations.' },
+          runIndex: { type: 'number', description: 'Run index for run operations.' },
+          offset: { type: 'number', description: 'Split offset for split_run.' },
+          props: { type: 'object', additionalProperties: true, description: 'Formatting properties.' },
+          find: { type: 'string', description: 'Text to replace for replace_text.' },
+          replace: { type: 'string', description: 'Replacement text for replace_text.' },
+          style: { type: 'string', description: 'Paragraph style for insert_paragraph.' },
+          sectionIndex: { type: 'number', description: 'Section index for set_section_props.' },
         },
         required: ['doc', 'type'],
         additionalProperties: false,
@@ -579,10 +648,12 @@ export function apply(ctx) {
           properties: {
             doc: { type: 'string' },
             path: { type: 'string' },
-            revision: { type: 'number' },
+            pendingOps: { type: 'number' },
             op: { type: 'string' },
             tracked: { type: 'boolean' },
             changed: { type: 'number' },
+            blocksChanged: { type: 'number' },
+            blocksTotal: { type: 'number' },
             affected: {
               type: 'array',
               items: {
@@ -599,12 +670,12 @@ export function apply(ctx) {
               },
             },
           },
-          required: ['doc', 'path', 'revision', 'op', 'tracked', 'changed', 'affected'],
+          required: ['doc', 'path', 'pendingOps', 'op', 'tracked', 'changed', 'blocksChanged', 'blocksTotal', 'affected'],
           additionalProperties: false,
         },
         render: (_args, value) => [{
           type: 'text',
-          text: `${value.op} applied as revision ${value.revision} (tracked=${value.tracked}, ${value.changed} block(s) changed)\n`
+          text: `${value.op} applied (pending ${value.pendingOps}; tracked=${value.tracked}, ${value.changed} block(s) changed)\n`
             + value.affected.map((entry) => `[${entry.id}] ${entry.textBefore === undefined ? '' : `- ${clip(entry.textBefore, 120)} `}${entry.textAfter === undefined ? '' : `+ ${clip(entry.textAfter, 120)}`}`).join('\n'),
         }],
         presentationMeta: (_args, value) => ({ path: value.path, affected: value.affected }),
@@ -636,16 +707,26 @@ export function apply(ctx) {
           ...(args.cells === undefined ? {} : { cells: args.cells }),
           ...(args.create === undefined ? {} : { create: args.create }),
           ...(args.rowIndex === undefined ? {} : { rowIndex: args.rowIndex }),
+          ...(args.columnIndex === undefined ? {} : { columnIndex: args.columnIndex }),
+          ...(args.runIndex === undefined ? {} : { runIndex: args.runIndex }),
+          ...(args.offset === undefined ? {} : { offset: args.offset }),
+          ...(args.props === undefined ? {} : { props: args.props }),
+          ...(args.find === undefined ? {} : { find: args.find }),
+          ...(args.replace === undefined ? {} : { replace: args.replace }),
+          ...(args.style === undefined ? {} : { style: args.style }),
+          ...(args.sectionIndex === undefined ? {} : { sectionIndex: args.sectionIndex }),
         }
         const edited = await model.edit(args.doc, op, { signal: exec && exec.signal })
-        const session = model.status().find((row) => row.handle === args.doc)
+        const session = model.contract(args.doc)
         return {
           doc: args.doc,
           path: session ? session.path : '',
-          revision: edited.revision,
+          pendingOps: model.contract(edited.handle).pendingOps,
           op: edited.op,
           tracked: edited.tracked === true,
           changed: edited.changed,
+          blocksChanged: edited.blocksChanged,
+          blocksTotal: edited.blocksTotal,
           affected: edited.affected,
         }
       },
@@ -730,7 +811,7 @@ export function apply(ctx) {
               properties: {
                 handle: { type: 'string' },
                 path: { type: 'string' },
-                revision: { type: 'number' },
+            pendingOps: { type: 'number' },
                 baseRevision: { type: 'string' },
                 readMode: { type: 'string' },
                 stale: { type: 'boolean' },
@@ -763,9 +844,9 @@ export function apply(ctx) {
               : `closed ${value.doc ?? ''}`,
       }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       if (args.action === 'status') {
-        return { action: 'status', sessions: model.status() }
+        return { action: 'status', sessions: model.status(undefined, sessionIdOf(exec)) }
       }
       if (args.action === 'revisions') {
         return { action: 'revisions', doc: args.doc, revisions: await model.revisions(args.doc) }
@@ -774,6 +855,7 @@ export function apply(ctx) {
         const reloaded = await model.reload(args.doc)
         return { action: 'reload', doc: args.doc, reloaded: true, baseRevision: reloaded.baseRevision }
       }
+      model.contract(args.doc)
       const closed = await model.close(args.doc)
       return { action: 'close', doc: args.doc, closed: closed.closed === true }
     },
@@ -786,7 +868,7 @@ export function apply(ctx) {
       + '(open editor documents and engine state), open (open a document in the right-dock editor), '
       + 'save (ask the editor to save its unsaved work), reload (ask the editor to reload from disk), '
       + 'export_pdf (convert the document to PDF), wait (wait for a file revision), '
-      + 'review (send accept_all, reject_all, next_change, previous_change or markup/display modes).',
+      + 'review (send acceptAll, rejectAll, acceptSelection, rejectSelection, nextChange, prevChange, displayMode or trackChanges).',
     parameters: {
       type: 'object',
       properties: {
@@ -810,6 +892,9 @@ export function apply(ctx) {
           engine: { type: 'object', additionalProperties: true },
           document: { type: 'object', additionalProperties: true },
           delivered: { type: 'number' },
+          executed: { type: 'boolean' },
+          changeCount: { type: 'number' },
+          userInstruction: { oneOf: [{ type: 'string' }, { type: 'null' }] },
           command: { type: 'string' },
           path: { type: 'string' },
           revision: { type: 'string' },
@@ -823,7 +908,7 @@ export function apply(ctx) {
       render: (_args, value) => [{
         type: 'text',
         text: value.action === 'status'
-          ? `${(value.documents ?? []).length} open editor document(s); engine ${value.engine?.running ? 'running' : 'stopped'}${value.engine?.ready ? ' (ready)' : ''}`
+          ? `${(value.documents ?? []).length} open editor document(s); engine ${value.engine?.state ?? (value.engine?.ready ? 'ready' : 'not-started')}`
           : value.action === 'export_pdf'
             ? `exported PDF ${value.pdf ?? ''}`
             : value.action === 'wait'
@@ -831,18 +916,29 @@ export function apply(ctx) {
               : `${value.action} ok (${value.command ?? value.path ?? value.doc ?? ''})`,
       }],
     },
-    async execute(args) {
+    async execute(args, exec) {
+      const hasDoc = typeof args.doc === 'string' && args.doc !== ''
+      const hasPath = typeof args.path === 'string' && args.path !== ''
+      if (args.action === 'open' && !hasPath) {
+        throw new WorkspaceError(ERROR_CODES.INVALID_ARGS, 'open needs a path')
+      }
+      if ((args.action === 'save' || args.action === 'reload' || args.action === 'review') && !hasDoc && !hasPath) {
+        throw new WorkspaceError(ERROR_CODES.INVALID_ARGS, `${args.action} needs doc or path`)
+      }
       if (args.action === 'status') {
         return { action: 'status', documents: documents.list(), engine: engineStatus(ctx) }
       }
       if (args.action === 'open') {
-        return { action: 'open', document: await documents.open(args.path) }
+        const document = await documents.open(args.path, { cwd: cwdOf(exec), sessionId: sessionIdOf(exec) })
+        if (typeof documents.requestOpen === 'function') documents.requestOpen(sessionIdOf(exec), document.path)
+        return { action: 'open', document }
       }
       if (args.action === 'wait') {
         const waited = await documents.wait(args.path, { since: args.since, timeoutMs: args.timeoutMs })
         return { action: 'wait', ...waited }
       }
       if (args.action === 'export_pdf') {
+        if (!hasDoc && !hasPath) throw new WorkspaceError(ERROR_CODES.INVALID_ARGS, 'export_pdf needs doc or path')
         const pdf = await documents.exportPdf(args.doc)
         return { action: 'export_pdf', pdf: pdf.path }
       }
@@ -855,15 +951,26 @@ export function apply(ctx) {
         return { action: 'reload', command: 'reload', delivered: documents.command({ id: args.doc, path: args.path, command: 'reload' }).delivered }
       }
       if (args.action === 'review') {
-        if (typeof args.command !== 'string' || args.command === '') {
-          throw new Error('review needs a command (accept_all, reject_all, next_change, previous_change, markup, display_mode)')
+        if (typeof args.command !== 'string' || !REVIEW_COMMANDS.has(args.command)) {
+          throw new WorkspaceError(ERROR_CODES.INVALID_ARGS, `unknown review command ${String(args.command ?? '')}`.trim())
         }
         if (!writeEnabled && WRITE_REVIEW_COMMANDS.has(args.command)) {
           throw new WorkspaceError(ERROR_CODES.WRITE_DISABLED, 'document writes are disabled (WORKSPACE_DOCX_WRITE=off)')
         }
-        return { action: 'review', command: args.command, delivered: documents.command({ id: args.doc, path: args.path, command: args.command, args: args.args }).delivered }
+        if (WRITE_REVIEW_COMMANDS.has(args.command) && (typeof args.userInstruction !== 'string' || args.userInstruction.trim() === '')) {
+          throw new WorkspaceError(ERROR_CODES.REVIEW_NOT_AUTHORIZED, 'a review command that changes the document needs userInstruction')
+        }
+        const sent = await documents.command({ id: args.doc, path: args.path, command: args.command, args: args.args, awaitAck: true })
+        return {
+          action: 'review',
+          command: args.command,
+          executed: sent.executed === true,
+          changeCount: Number.isInteger(sent.changeCount) ? sent.changeCount : 0,
+          userInstruction: args.userInstruction ?? null,
+          delivered: sent.delivered,
+        }
       }
-      throw new Error(`unknown editor action: ${String(args.action)}`)
+      throw new WorkspaceError(ERROR_CODES.INVALID_ARGS, `unknown editor action: ${String(args.action)}`)
     },
   })
 
@@ -874,7 +981,7 @@ export function apply(ctx) {
     interpolate: false,
     text: (context) => {
       try {
-        const lines = model.statusLines(cwdOf(context))
+        const lines = model.statusLines(cwdOf(context), sessionIdOf(context))
         return lines.length === 0 ? '' : `Open agent documents (handle path rev base blocks read editor pending):\n${lines.join('\n')}`
       } catch (error) {
         return ''
@@ -883,21 +990,24 @@ export function apply(ctx) {
   })
 
   // --- lifecycle ------------------------------------------------------------
-  ctx.effect(() => () => model.dispose(), 'workspace-docx-tools.dispose')
 }
 
 /** @param {object} ctx - row context; the engine is optional outside the bundle. */
 function engineStatus(ctx) {
   try {
     const engine = ctx.docxEngine
-    return engine && typeof engine.status === 'function' ? engine.status() : { running: false, ready: false }
+    const status = engine && typeof engine.status === 'function' ? engine.status() : { running: false, ready: false }
+    const state = status.broken === true ? 'broken' : status.ready === true ? 'ready' : status.running === true ? 'restarting' : 'not-started'
+    return { ...status, state }
   } catch (error) {
-    return { running: false, ready: false }
+    return { running: false, ready: false, state: 'broken' }
   }
 }
 
 /** @param {unknown} text - block text. @param {number} limit - cap. @returns {string} */
 function clip(text, limit) {
   const value = typeof text === 'string' ? text : ''
-  return value.length <= limit ? value : `${value.slice(0, limit)}…`
+  return value.length <= limit ? value : `${value.slice(0, limit)}â€¦`
 }
+
+

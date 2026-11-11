@@ -1,4 +1,4 @@
-'use strict'
+﻿'use strict'
 
 // Hidden-Electron Document Builder sidecar for workspace-editor's ctx.docxEngine.
 //
@@ -20,10 +20,18 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
+const { taskQueueXml } = require('../task-queue.cjs')
 
 const HOST = __dirname
 const PROTOCOL = 1
 const TEST_HOOKS = process.argv.includes('--test-hooks')
+
+for (const required of ['eo-root', 'x2t', 'temp-root']) {
+  if (!process.argv.some((value) => value.startsWith(`--${required}=`))) {
+    console.error(`missing argument --${required}`)
+    process.exit(2)
+  }
+}
 
 function argValue(name, fallback) {
   const prefix = `--${name}=`
@@ -123,23 +131,14 @@ function safeName(value) {
   return String(value).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96) || 'session'
 }
 
-function xmlEscape(value) {
-  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
 function paramsXml(input, output, formatTo, tempDir) {
-  return `<?xml version="1.0" encoding="utf-8"?>
-<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-<m_sFileFrom>${xmlEscape(input.replace(/\\/g, '/'))}</m_sFileFrom>
-<m_sFileTo>${xmlEscape(output.replace(/\\/g, '/'))}</m_sFileTo>
-<m_nFormatTo>${formatTo}</m_nFormatTo>
-<m_sTempDir>${xmlEscape(tempDir.replace(/\\/g, '/'))}</m_sTempDir>
-<options>
-<allowPrivateIP>false</allowPrivateIP>
-<allowNetworkRequest>false</allowNetworkRequest>
-</options>
-</TaskQueueDataConvert>`
+  return taskQueueXml({
+    from: input,
+    to: output,
+    format: formatTo,
+    tempDir,
+    extra: '<options>\n<allowPrivateIP>false</allowPrivateIP>\n<allowNetworkRequest>false</allowNetworkRequest>\n</options>\n',
+  })
 }
 
 function fileSize(filePath) {
@@ -364,6 +363,11 @@ async function createSessionWindow(session) {
         backgroundThrottling: false,
       },
     })
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.on('will-navigate', (event, url) => {
+      const allowed = `http://127.0.0.1:${serverPort}/`
+      if (!String(url).startsWith(allowed)) event.preventDefault()
+    })
     const senderId = window.webContents.id
     session.window = window
     session.senderId = senderId
@@ -443,23 +447,28 @@ async function openSession(params, signal) {
   }
 }
 
-async function describeSession(params) {
+async function describeSession(params, signal) {
+  checkAbort(signal)
   const session = requireSession(params.sessionId)
   const description = await exec(session, 'window.__dbx.describe()')
+  checkAbort(signal)
   return description
 }
 
-async function applySession(params) {
+async function applySession(params, signal) {
+  checkAbort(signal)
   const session = requireSession(params.sessionId)
   const op = params.op
   if (!op || typeof op !== 'object' || typeof op.type !== 'string') throw protocolError('BAD_REQUEST', 'apply requires an op with a type')
   const result = await exec(session, `window.__dbx.applyOp(${JSON.stringify(op)})`)
+  checkAbort(signal)
   if (!result || typeof result !== 'object') throw protocolError('OP_FAILED', 'builder host returned no result')
   if (result.ok === false) throw protocolError(result.code || 'OP_FAILED', result.message || 'operation failed')
   return result
 }
 
-async function saveSession(params) {
+async function saveSession(params, signal) {
+  checkAbort(signal)
   const session = requireSession(params.sessionId)
   const binBase64 = await exec(session, 'window.__dbx.saveBinBase64()')
   if (typeof binBase64 !== 'string' || binBase64.length === 0) throw protocolError('SAVE_FAILED', 'builder returned no Editor.bin')
@@ -469,6 +478,7 @@ async function saveSession(params) {
   const stagingDir = path.join(session.dir, 'save_output')
   await fsp.rm(stagingDir, { recursive: true, force: true })
   await fsp.mkdir(stagingDir, { recursive: true })
+  checkAbort(signal)
   const staged = path.join(stagingDir, 'document.docx')
   const x2t = await runX2t(session.binPath, staged, 65, session.dir, 'save')
   if (fileSize(staged) === 0) throw protocolError('SAVE_FAILED', 'x2t save wrote a zero-byte DOCX')
@@ -520,9 +530,9 @@ async function shutdown() {
 const methods = {
   ping: async () => ({ pong: Date.now(), pid: process.pid, protocol: PROTOCOL }),
   open: (params, signal) => openSession(params, signal),
-  describe: (params) => describeSession(params),
-  apply: (params) => applySession(params),
-  save: (params) => saveSession(params),
+  describe: (params, signal) => describeSession(params, signal),
+  apply: (params, signal) => applySession(params, signal),
+  save: (params, signal) => saveSession(params, signal),
   close: (params) => closeSession(params.sessionId),
   shutdown: () => shutdown(),
   'debug.sleep': (params, signal) => debugSleep(params, signal),
@@ -641,3 +651,4 @@ app.whenReady().then(async () => {
   writeCrash('startup', error)
   try { app.exit(1) } catch (inner) {}
 })
+

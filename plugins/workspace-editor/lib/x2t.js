@@ -1,4 +1,4 @@
-/**
+﻿/**
  * x2t conversion for the editor plugin: one conversion at a time, a cleared
  * temp folder per run, and the font cache PDF export needs.
  *
@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import taskQueue from './engine/task-queue.cjs'
 
 const pluginDir = path.dirname(fileURLToPath(import.meta.url))
 export const repoRoot = path.resolve(pluginDir, '..', '..', '..')
@@ -54,23 +55,19 @@ export function convert(job) {
   return run
 }
 
-const xmlEscape = (value) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-const slashes = (value) => value.replaceAll('\\', '/')
-
 const OPTIONS = '<options>\n<allowPrivateIP>false</allowPrivateIP>\n<allowNetworkRequest>false</allowNetworkRequest>\n</options>\n'
 
 function paramsXml(job) {
   const fontFields = job.pdf === true
-    ? `<m_bEmbeddedFonts>true</m_bEmbeddedFonts>\n<m_sFontDir>${xmlEscape(slashes(FONTS_DIR))}</m_sFontDir>\n<m_sAllFontsPath>${xmlEscape(slashes(ALLFONTS))}</m_sAllFontsPath>\n`
+    ? `<m_bEmbeddedFonts>true</m_bEmbeddedFonts>\n<m_sFontDir>${taskQueue.xmlEscape(taskQueue.slashes(FONTS_DIR))}</m_sFontDir>\n<m_sAllFontsPath>${taskQueue.xmlEscape(taskQueue.slashes(ALLFONTS))}</m_sAllFontsPath>\n`
     : ''
-  return `<?xml version="1.0" encoding="utf-8"?>
-<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-<m_sFileFrom>${xmlEscape(slashes(job.from))}</m_sFileFrom>
-<m_sFileTo>${xmlEscape(slashes(job.to))}</m_sFileTo>
-<m_nFormatTo>${job.format}</m_nFormatTo>
-<m_sTempDir>${xmlEscape(slashes(job.tempDir))}</m_sTempDir>
-${fontFields}${OPTIONS}</TaskQueueDataConvert>`
+  return taskQueue.taskQueueXml({
+    from: job.from,
+    to: job.to,
+    format: job.format,
+    tempDir: job.tempDir,
+    extra: fontFields + OPTIONS,
+  })
 }
 
 /**
@@ -115,3 +112,4 @@ async function runNow(job) {
   }
   return { ...result, ms }
 }
+

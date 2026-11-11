@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `workspace-docx-model` row: register `ctx.docxModel`, the per-activation
  * document session service the agent tools consume.
  *
@@ -35,6 +35,9 @@ export function apply(ctx) {
     if (payload && typeof payload.path === 'string' && typeof payload.revision === 'string') {
       model.noteSaved(payload.path, payload.revision)
     }
+  })
+  ctx.on('session/disposed', (session) => {
+    if (session && typeof session.id === 'string') void model.disposeOwner(session.id)
   })
   ctx.on('editor-documents/conflict', (payload) => {
     if (payload && typeof payload.path === 'string') model.noteConflict(payload.path, payload.code)

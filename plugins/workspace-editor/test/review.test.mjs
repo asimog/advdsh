@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Unit tests for the legal analyzers and the `workspace-legal-review` row:
  * planted defects, stable codes, code filtering, analyzer registration and the
  * `doc_analyze` tool over a fake model.
@@ -172,4 +172,11 @@ test('analyzers registered on the model feed model.check', async () => {
   assert.deepEqual(planted.codes, ['PLANTED'])
   dispose()
   assert.equal((await model.check(opened.handle)).ok, true)
+})
+test('the citation analyzer counts every valid citation in a block (WD-106)', async () => {
+  const findings = []
+  for (const analyzer of createLegalAnalyzers()) {
+    findings.push(...await analyzer({ blocks: [{ id: 'w14:1', index: 0, kind: 'paragraph', text: 'See (2019) 5 SCC 1 and (2020) 3 SCC 45.' }] }))
+  }
+  assert.deepEqual(findings, [])
 })

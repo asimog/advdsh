@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `workspace-docx-fanout` row: parallel editing over `ctx.subagents`.
  *
  * `doc_fanout` forks the parent session once per task, starts one child per fork
@@ -8,7 +8,7 @@
  * commits once after the merge.
  */
 export const name = 'workspace-docx-fanout'
-export const inject = ['tools', 'docxModel', 'subagents']
+export const inject = ['tools', 'docxModel', 'subagents', 'docxRoles']
 
 /** Default number of children editing at once. */
 const DEFAULT_CONCURRENCY = 3
@@ -22,6 +22,7 @@ const MAX_TASKS = 8
 export function apply(ctx) {
   const model = ctx.docxModel
   const subagents = ctx.subagents
+  const roles = ctx.docxRoles
   const writeEnabled = process.env.WORKSPACE_DOCX_WRITE !== 'off'
   /** Live activations, disposed with the row or at the end of the call. */
   const activations = new Set()
@@ -45,6 +46,9 @@ export function apply(ctx) {
               properties: {
                 label: { type: 'string', description: 'Short task label for the fork and its findings.' },
                 prompt: { type: 'string', description: 'What the child must change in its fork.' },
+                kind: { type: 'string', enum: ['apply', 'review'], description: 'Task kind; defaults to apply.' },
+                blockIds: { type: 'array', items: { type: 'string' }, description: 'Block chunk of the task.' },
+                changes: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Change proposals for an apply task.' },
               },
               required: ['label', 'prompt'],
               additionalProperties: false,
@@ -74,6 +78,15 @@ export function apply(ctx) {
                 additionalProperties: true,
               },
             },
+            changes: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { id: { type: 'string' }, status: { type: 'string' } },
+                required: ['id', 'status'],
+                additionalProperties: false,
+              },
+            },
             merged: {
               type: 'object',
               properties: {
@@ -86,15 +99,16 @@ export function apply(ctx) {
                     type: 'object',
                     properties: {
                       id: { type: 'string' },
-                      base: { type: 'string' },
-                      parent: { type: 'string' },
+                      base: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                      parent: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                      reason: { type: 'string' },
                       candidates: {
                         type: 'array',
                         items: {
                           type: 'object',
                           properties: {
                             task: { type: 'string' },
-                            text: { type: 'string' },
+                            text: { oneOf: [{ type: 'string' }, { type: 'null' }] },
                           },
                           required: ['task'],
                           additionalProperties: true,
@@ -123,18 +137,29 @@ export function apply(ctx) {
               additionalProperties: false,
             },
           },
-          required: ['doc', 'forks', 'merged'],
+          required: ['doc', 'forks', 'changes', 'merged'],
           additionalProperties: false,
         },
         render: (_args, value) => [{
           type: 'text',
-          text: `${value.forks.length} fork(s): ${value.forks.map((fork) => `${fork.label}=${fork.status}`).join(', ')}\n`
+          text: `${value.forks.length} fork(s): ${value.forks.map((fork) => `${fork.label}=${fork.status}${fork.summary ? ` (${String(fork.summary).slice(0, 80)})` : ''}`).join(', ')}\n`
             + `merged ${value.merged.applied} change(s)${value.merged.conflicts.length > 0 ? `; ${value.merged.conflicts.length} conflict(s) on ${value.merged.conflicts.map((conflict) => conflict.id).join(', ')}` : ''}`
             + `${value.merged.failed.length > 0 ? `; ${value.merged.failed.length} merge failure(s)` : ''}`,
         }],
       },
       async execute(args, exec) {
         const tasks = normalizeTasks(args.tasks)
+        if (args.allowOverlap !== true) {
+          for (let left = 0; left < tasks.length; left++) {
+            for (let right = left + 1; right < tasks.length; right++) {
+              if (tasks[left].kind !== 'apply' || tasks[right].kind !== 'apply') continue
+              const overlap = tasks[left].blockIds.filter((id) => tasks[right].blockIds.includes(id))
+              if (overlap.length > 0) {
+                throw Object.assign(new Error(`DOC_INVALID_ARGS: ${tasks[left].label} and ${tasks[right].label} share ${overlap.join(', ')}`), { code: 'DOC_INVALID_ARGS' })
+              }
+            }
+          }
+        }
         const concurrency = clampConcurrency(args.concurrency)
         const providerName = 'spawn'
         const provider = typeof subagents.getProvider === 'function' ? subagents.getProvider(providerName) : undefined
@@ -154,7 +179,7 @@ export function apply(ctx) {
               run.status = 'aborted'
               return
             }
-            const prompt = buildPrompt(run.fork, run.task, args.doc)
+            const prompt = buildPrompt(run.fork, run.task, args.constraints)
             let activation
             try {
               activation = await subagents.startActivation({
@@ -174,14 +199,31 @@ export function apply(ctx) {
               return
             }
             activations.add(activation)
+            if (run.task.kind === 'apply') {
+              roles.registerApplier(activation.childId, {
+                blockIds: run.task.blockIds,
+                changeIds: run.task.changes.map((change) => change.id),
+              })
+            }
+            let aborted = false
+            const onAbort = () => {
+              aborted = true
+              run.status = 'aborted'
+              void activation.dispose().catch(() => {})
+            }
+            if (exec.signal) exec.signal.addEventListener('abort', onAbort, { once: true })
             try {
               const result = await activation.result
+              if (aborted) return
               run.status = typeof result.stopReason === 'string' ? result.stopReason : 'completed'
               run.summary = outputText(result.output)
             } catch (error) {
+              if (aborted) return
               run.status = 'failed'
               run.summary = error instanceof Error ? error.message : String(error)
             } finally {
+              if (exec.signal) exec.signal.removeEventListener('abort', onAbort)
+              roles.removeApplier(activation.childId)
               activations.delete(activation)
               await activation.dispose().catch(() => {})
             }
@@ -193,6 +235,17 @@ export function apply(ctx) {
           } else {
             merged = await model.merge(args.doc, completed)
           }
+          const changes = []
+          if (tasks.some((task) => task.kind === 'apply' && task.changes.length > 0)) {
+            const live = await model.read(args.doc, { mode: 'full' })
+            const byId = new Map((live.blocks ?? []).map((block) => [block.id, block.text]))
+            for (const task of tasks) {
+              if (task.kind !== 'apply') continue
+              for (const change of task.changes) {
+                changes.push({ id: change.id, status: byId.get(change.blockId) === change.newText ? 'applied' : 'not-applied' })
+              }
+            }
+          }
           return {
             doc: args.doc,
             forks: runs.map((run) => ({
@@ -201,6 +254,7 @@ export function apply(ctx) {
               status: run.status,
               ...(typeof run.summary === 'string' && run.summary !== '' ? { summary: run.summary } : {}),
             })),
+            changes,
             merged: {
               applied: merged.applied,
               changed: merged.changed === true,
@@ -231,7 +285,16 @@ function normalizeTasks(value) {
     const label = typeof task.label === 'string' && task.label.trim() !== '' ? task.label.trim() : `task-${index + 1}`
     const prompt = typeof task.prompt === 'string' ? task.prompt.trim() : ''
     if (prompt === '') throw new Error(`task ${index} needs a prompt`)
-    return { label, prompt }
+    const kind = task.kind === 'review' ? 'review' : 'apply'
+    const changes = Array.isArray(task.changes)
+      ? task.changes.filter((change) => change && typeof change === 'object'
+        && typeof change.id === 'string' && typeof change.blockId === 'string'
+        && typeof change.expectedText === 'string' && typeof change.newText === 'string')
+      : []
+    const blockIds = Array.isArray(task.blockIds)
+      ? task.blockIds.filter((id) => typeof id === 'string')
+      : [...new Set(changes.map((change) => change.blockId))]
+    return { label, prompt, kind, changes, blockIds }
   })
 }
 
@@ -261,9 +324,14 @@ function childRequestBase(exec, provider, subagents) {
     : undefined
   if (provider.capabilities && provider.capabilities.depthLimit === true && Number.isInteger(delegationDepth)) {
     const resolved = typeof subagents.resolveMaxDepth === 'function'
-      ? subagents.resolveMaxDepth(delegationDepth + 1)
-      : delegationDepth + 1
-    if (Number.isInteger(resolved)) base.maxDepth = resolved
+      ? subagents.resolveMaxDepth()
+      : undefined
+    if (Number.isInteger(resolved)) {
+      if (delegationDepth >= resolved) {
+        throw Object.assign(new Error(`DOC_FANOUT_DEPTH: delegation depth ${delegationDepth} reached the limit ${resolved}`), { code: 'DOC_FANOUT_DEPTH' })
+      }
+      base.maxDepth = resolved
+    }
   }
   return base
 }
@@ -271,16 +339,19 @@ function childRequestBase(exec, provider, subagents) {
 /**
  * The child prompt: which fork to edit, what to change, and the hard rules.
  * @param {{ handle: string, name: string }} fork - fork summary.
- * @param {{ label: string, prompt: string }} task - task text.
- * @param {string} parentHandle - parent session handle (for reporting only).
+ * @param {{ label: string, prompt: string, kind: string, blockIds: string[], changes: object[] }} task - task facts.
+ * @param {string} [constraints] - shared constraint text.
  * @returns {string} child prompt.
  */
-function buildPrompt(fork, task, parentHandle) {
+function buildPrompt(fork, task, constraints) {
+  const changes = task.changes.length > 0 ? `\nProposals (JSON): ${JSON.stringify(task.changes)}` : ''
+  const chunk = task.blockIds.length > 0 ? `\nAllowed block ids: ${task.blockIds.join(', ')}` : ''
+  const rules = typeof constraints === 'string' && constraints.trim() !== '' ? `\nConstraints: ${constraints.trim()}` : ''
   return `You are editing an isolated fork of the Word document "${fork.name}".\n`
-    + `Fork handle: ${fork.handle} (parent ${parentHandle}).\n`
+    + `Fork handle: ${fork.handle}.\n`
     + 'Use doc_read, doc_search, doc_edit and doc_diff on the fork handle only. '
     + 'Do not call doc_open, doc_commit, doc_fanout or editor. Make one tracked edit per doc_edit call and keep block ids stable.\n'
-    + `Task (${task.label}): ${task.prompt}\n`
+    + `Task (${task.label}): ${task.prompt}${changes}${chunk}${rules}\n`
     + 'Reply with one short paragraph naming the block ids you changed.'
 }
 

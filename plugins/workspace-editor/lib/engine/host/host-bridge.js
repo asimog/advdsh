@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 // Page half of the Document Builder sidecar.
 //
@@ -222,6 +222,13 @@
     return hash.toString(16).padStart(8, '0')
   }
 
+  /** Monotonic `w14:paraId` allocator for paragraphs opened without one. */
+  let nextParaId = 0x10000000
+  function allocateParaId() {
+    if (nextParaId >= 0x7fffffff) nextParaId = 0x10000000
+    return nextParaId++
+  }
+
   /** Session-stable ID for one body element; paraId is exposed separately. */
   function elementInfo(element, index) {
     const info = { index: index, kind: 'unknown', id: null, text: '', style: null, paraId: null, rows: null }
@@ -234,6 +241,13 @@
     } catch (error) {}
     if (kind === 'paragraph') {
       try { info.paraId = element.GetParaId() || null } catch (error) {}
+      if (!info.paraId && typeof element.SetParaId === 'function') {
+        try {
+          const minted = allocateParaId()
+          element.SetParaId(minted)
+          info.paraId = minted
+        } catch (error) {}
+      }
       // `w14:paraId` is the stable identity the design asks for: it survives a
       // save/reopen round trip, unlike sdkjs's session-scoped internal id.
       info.id = info.paraId
@@ -245,7 +259,14 @@
       try {
         const pr = element.GetParaPr()
         const style = pr && pr.GetStyle()
-        if (style && typeof style.GetName === 'function') info.style = style.GetName()
+        if (style && typeof style.GetName === 'function') {
+          info.style = style.GetName()
+          info.props = { ...(info.props ?? {}), style: info.style }
+        }
+        if (pr && typeof pr.GetJc === 'function') {
+          const align = pr.GetJc()
+          if (align !== undefined) info.props = { ...(info.props ?? {}), align }
+        }
         if (pr && typeof pr.GetOutlineLvl === 'function') {
           const level = pr.GetOutlineLvl()
           if (level !== undefined && level !== null) info.level = level
@@ -309,8 +330,24 @@
       }
       blocks.push(info)
     }
+    const sections = []
+    try {
+      const section = doc.GetFinalSection()
+      if (section) {
+        sections.push({
+          index: 0,
+          kind: 'section',
+          props: {
+            pageWidth: section.GetPageWidth(),
+            pageHeight: section.GetPageHeight(),
+            orientation: section.GetPageWidth() > section.GetPageHeight() ? 'landscape' : 'portrait',
+          },
+        })
+      }
+    } catch (error) {}
     return {
       blocks,
+      sections,
       paragraphCount: blocks.filter((block) => block.kind === 'paragraph').length,
       tableCount: blocks.filter((block) => block.kind === 'table').length,
       elementsCount: count,
@@ -475,6 +512,45 @@
     return before
   }
 
+  /** Apply text properties to one ApiRun. @param {object} run - ApiRun. @param {object} props - properties. */
+  function applyRunProps(run, props) {
+    if (!run || typeof props !== 'object' || props === null) return
+    const setters = {
+      bold: 'SetBold', italic: 'SetItalic', underline: 'SetUnderline',
+      size: 'SetFontSize', font: 'SetFontFamily', color: 'SetColor', highlight: 'SetHighlight',
+    }
+    for (const [key, method] of Object.entries(setters)) {
+      if (props[key] === undefined || typeof run[method] !== 'function') continue
+      try { run[method](props[key]) } catch (error) {}
+    }
+  }
+
+  /** Rebuild a paragraph from run facts. @param {object} paragraph - ApiParagraph. @param {object[]} runs - run facts. */
+  function rebuildParagraph(paragraph, runs) {
+    paragraph.RemoveAllElements()
+    for (const entry of runs) {
+      if (entry.kind === 'opaque') continue
+      const run = paragraph.AddText(entry.text ?? '')
+      applyRunProps(run, entry.props ?? {})
+    }
+    // RemoveAllElements can leave one empty run at the start.
+    for (let guard = 0; guard < 4; guard++) {
+      const first = paragraph.GetElement(0)
+      if (!first) break
+      let text = ''
+      try { text = cleanText(first.GetText({ NewLineSeparator: '', TabSymbol: '\\\\t' })) } catch (error) { break }
+      if (text !== '') break
+      try { first.Delete() } catch (error) { break }
+    }
+  }
+
+  /** @param {object} paragraph - ApiParagraph. @returns {object[]} editable run facts. */
+  function editableRuns(paragraph) {
+    return paragraphRuns(paragraph).filter((run) => {
+      if (run.kind === 'opaque') throw new Error('the paragraph contains an opaque run')
+      return run.text !== ''
+    })
+  }
   function runOp(doc, op) {
     const Api = getApi()
     const type = op.type
@@ -490,7 +566,68 @@
       const before = replaceParagraphText(target.element, op.text)
       return { type, targetId: elementInfo(target.element, target.index).id, textBefore: before, textAfter: paragraphText(target.element) }
     }
-    if (type === 'insert_paragraph') {
+    if (type === 'set_run_props' || type === 'set_run_text' || type === 'split_run' || type === 'merge_runs') {
+      const target = findTarget(doc, op)
+      if (target && target.ambiguous) return opError('AMBIGUOUS_TARGET', `${type}: ${target.count} blocks have id ${target.id}`)
+      if (!target) return opError('TARGET_NOT_FOUND', `${type}: target block not found`)
+      if (target.element.GetClassType() !== 'paragraph') return opError('WRONG_KIND', `${type}: target is not a paragraph`)
+      const runs = editableRuns(target.element)
+      const run = runs.find((entry) => entry.runIndex === op.runIndex)
+      if (!run) return opError('TARGET_NOT_FOUND', `${type}: run not found`)
+      if (op.expectedText !== undefined && run.text !== op.expectedText) {
+        return opError('STALE_TARGET', `${type}: run text does not match expectedText`)
+      }
+      if (type === 'set_run_props') {
+        applyRunProps(target.element.GetElement(op.runIndex), op.props ?? {})
+      } else if (type === 'set_run_text') {
+        if (typeof op.text !== 'string') return opError('BAD_OP', 'set_run_text: text must be a string')
+        run.text = op.text
+        rebuildParagraph(target.element, runs)
+      } else if (type === 'split_run') {
+        const offset = Number.isFinite(op.offset) ? Math.max(0, Math.min(op.offset, run.text.length)) : 0
+        const at = runs.indexOf(run)
+        runs.splice(at, 1, { ...run, text: run.text.slice(0, offset) }, { ...run, text: run.text.slice(offset) })
+        rebuildParagraph(target.element, runs)
+      } else {
+        const at = runs.indexOf(run)
+        const next = runs[at + 1]
+        if (!next) return opError('TARGET_NOT_FOUND', 'merge_runs: no following run')
+        if (JSON.stringify(run.props ?? {}) !== JSON.stringify(next.props ?? {})) return opError('BAD_OP', 'merge_runs: run properties differ')
+        run.text += next.text
+        runs.splice(at + 1, 1)
+        rebuildParagraph(target.element, runs)
+      }
+      return { type, targetId: elementInfo(target.element, target.index).id, textBefore: op.expectedText ?? '', textAfter: paragraphText(target.element) }
+    }
+    if (type === 'set_paragraph_props') {
+      const target = findTarget(doc, op)
+      if (target && target.ambiguous) return opError('AMBIGUOUS_TARGET', `${type}: ${target.count} blocks have id ${target.id}`)
+      if (!target) return opError('TARGET_NOT_FOUND', `${type}: target block not found`)
+      if (target.element.GetClassType() !== 'paragraph') return opError('WRONG_KIND', `${type}: target is not a paragraph`)
+      const props = op.props ?? {}
+      const pr = target.element.GetParaPr()
+      if (typeof props.style === 'string') {
+        const style = doc.GetStyle(props.style)
+        if (!style) return opError('TARGET_NOT_FOUND', `set_paragraph_props: style not found: ${props.style}`)
+        pr.SetStyle(style)
+      }
+      if (typeof props.align === 'string') pr.SetJc(props.align)
+      if (Number.isFinite(props.spacingAfter)) pr.SetSpacingAfter(props.spacingAfter)
+      return { type, targetId: elementInfo(target.element, target.index).id, textBefore: '', textAfter: paragraphText(target.element) }
+    }
+    if (type === 'replace_text') {
+      const target = findTarget(doc, op)
+      if (target && target.ambiguous) return opError('AMBIGUOUS_TARGET', `replace_text: ${target.count} blocks have id ${target.id}`)
+      if (!target) return opError('TARGET_NOT_FOUND', 'replace_text: target block not found')
+      if (target.element.GetClassType() !== 'paragraph') return opError('WRONG_KIND', 'replace_text: target is not a paragraph')
+      const before = paragraphText(target.element)
+      if (op.expectedText !== undefined && before !== op.expectedText) return opError('STALE_TARGET', 'replace_text: text does not match expectedText')
+      if (typeof op.find !== 'string' || op.find === '') return opError('BAD_OP', 'replace_text: find must be a non-empty string')
+      const count = before.split(op.find).length - 1
+      const after = typeof op.replace === 'string' ? before.split(op.find).join(op.replace) : before
+      if (count > 0) replaceParagraphText(target.element, after)
+      return { type, targetId: elementInfo(target.element, target.index).id, replacements: count, textBefore: before, textAfter: after }
+    }    if (type === 'insert_paragraph') {
       if (typeof op.text !== 'string') return opError('BAD_OP', 'insert_paragraph: text must be a string')
       const paragraph = Api.CreateParagraph()
       if (op.text !== '') paragraph.AddText(op.text)
@@ -553,15 +690,17 @@
           if (element && element.GetClassType() === 'table') { table = element; tableIndex = i; break }
         }
       }
+      let created = false
       if (!table) {
-        if (op.create === false) return opError('TARGET_NOT_FOUND', 'insert_table_row: no table in document')
+        if (op.create !== true) return opError('TARGET_NOT_FOUND', 'insert_table_row: no table in document')
         const cells = Array.isArray(op.cells) && op.cells.length > 0 ? op.cells.length : 1
         table = Api.CreateTable(1, cells)
         doc.Push(table)
         tableIndex = doc.GetElementsCount() - 1
+        created = true
       }
       const rowsBefore = table.GetRowsCount()
-      const row = table.AddRow()
+      const row = created ? table.GetRow(0) : table.AddRow()
       const cells = Array.isArray(op.cells) ? op.cells : []
       for (let c = 0; c < cells.length; c++) {
         try {
@@ -587,6 +726,63 @@
       if (!row) return opError('TARGET_NOT_FOUND', 'delete_table_row: row not found')
       row.Remove()
       return { type, tableId: op.blockId || null, rowIndex, rowsAfter: target.element.GetRowsCount() }
+    }
+    if (type === 'set_cell_text' || type === 'insert_table_column' || type === 'delete_table_column') {
+      let table = null
+      for (let i = 0; i < doc.GetElementsCount(); i++) {
+        const element = doc.GetElement(i)
+        if (!element || element.GetClassType() !== 'table') continue
+        const id = elementInfo(element, i).id
+        if (op.tableBlockId === undefined || op.tableBlockId === id) { table = element; break }
+      }
+      if (!table) return opError('TARGET_NOT_FOUND', `${type}: table not found`)
+      if (type === 'set_cell_text') {
+        const row = table.GetRow(op.rowIndex)
+        if (!row) return opError('TARGET_NOT_FOUND', 'set_cell_text: row not found')
+        const cell = row.GetCell(op.columnIndex)
+        if (!cell) return opError('TARGET_NOT_FOUND', 'set_cell_text: cell not found')
+        const paragraph = cell.GetContent().GetElement(0)
+        if (!paragraph) return opError('TARGET_NOT_FOUND', 'set_cell_text: cell paragraph not found')
+        if (op.expectedText !== undefined && paragraphText(paragraph) !== op.expectedText) {
+          return opError('STALE_TARGET', 'set_cell_text: cell text does not match expectedText')
+        }
+        if (typeof op.text !== 'string') return opError('BAD_OP', 'set_cell_text: text must be a string')
+        const before = replaceParagraphText(paragraph, op.text)
+        return { type, textBefore: before, textAfter: paragraphText(paragraph) }
+      }
+      const column = Number.isFinite(op.columnIndex) ? op.columnIndex : table.GetRow(0).GetCellsCount() - 1
+      const cell = table.GetRow(0).GetCell(Math.max(0, column))
+      if (!cell) return opError('TARGET_NOT_FOUND', `${type}: column not found`)
+      if (type === 'insert_table_column') {
+        table.AddColumn(cell, false)
+        if (Array.isArray(op.cells)) {
+          for (let row = 0; row < table.GetRowsCount(); row++) {
+            const target = table.GetRow(row).GetCell(column + 1)
+            const paragraph = target && target.GetContent().GetElement(0)
+            if (paragraph && typeof op.cells[row] === 'string') replaceParagraphText(paragraph, op.cells[row])
+          }
+        }
+      } else {
+        table.RemoveColumn(cell)
+      }
+      return { type, columnIndex: column }
+    }
+    if (type === 'set_section_props') {
+      const section = doc.GetFinalSection()
+      if (!section) return opError('TARGET_NOT_FOUND', 'set_section_props: no final section')
+      const props = op.props ?? {}
+      if (Number.isFinite(props.pageWidth) && Number.isFinite(props.pageHeight)) {
+        section.SetPageSize(props.pageWidth, props.pageHeight, props.orientation !== 'landscape')
+      }
+      if (Number.isFinite(props.marginLeft) || Number.isFinite(props.marginTop) || Number.isFinite(props.marginRight) || Number.isFinite(props.marginBottom)) {
+        section.SetPageMargins(
+          Number.isFinite(props.marginLeft) ? props.marginLeft : section.GetPageMarginLeft(),
+          Number.isFinite(props.marginTop) ? props.marginTop : section.GetPageMarginTop(),
+          Number.isFinite(props.marginRight) ? props.marginRight : section.GetPageMarginRight(),
+          Number.isFinite(props.marginBottom) ? props.marginBottom : section.GetPageMarginBottom(),
+        )
+      }
+      return { type }
     }
     return opError('UNKNOWN_OP', 'unsupported operation type: ' + String(type))
   }
@@ -736,3 +932,4 @@
     void boot()
   }
 })()
+

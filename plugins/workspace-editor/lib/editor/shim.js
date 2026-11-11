@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AscDesktopEditor for the workspace editor: the members sdkjs calls in a
  * desktop host, answered over the plugin's HTTP routes instead of Tauri.
  *
@@ -17,6 +17,10 @@
 
   var params = new URLSearchParams(window.location.search)
   var docId = params.get('doc') || ''
+  var sessionId = params.get('session') || ''
+  var hostPath = params.get('path') || ''
+  function sessionQuery() { return sessionId === '' ? '' : '?session=' + encodeURIComponent(sessionId) }
+  function sessionAmp() { return sessionId === '' ? '' : '&session=' + encodeURIComponent(sessionId) }
   var API = '/workspace-editor/api'
   var EVENTS = '/workspace-editor/events'
   var eventState = { dirty: false }
@@ -57,13 +61,20 @@
   }
 
   /** Report the state the open tab claims; `setEditorState` broadcasts an editor frame on change. */
-  function reportState() {
+  function reportState(attempt) {
     if (docId === '') return
+    var tries = typeof attempt === 'number' ? attempt : 0
     try {
-      fetch(API + '/editor', {
+      fetch(API + '/editor' + sessionQuery(), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: docId, modified: eventState.dirty, revision: hostState.revision }),
+      }).then(function (response) {
+        if (!response.ok && tries < 3) {
+          setTimeout(function () { reportState(tries + 1) }, 250 * (tries + 1))
+        }
+      }).catch(function () {
+        if (tries < 3) setTimeout(function () { reportState(tries + 1) }, 250 * (tries + 1))
       })
     } catch (e) {}
   }
@@ -71,7 +82,7 @@
   /** Read the open document's path and revision once; the tab cannot save without a base. */
   function refreshInfo() {
     if (docId === '') return Promise.resolve(undefined)
-    return fetch(API + '/info?id=' + encodeURIComponent(docId))
+    return fetch(API + '/info?id=' + encodeURIComponent(docId) + sessionAmp())
       .then(function (response) {
         return response.ok ? response.json() : undefined
       })
@@ -164,6 +175,11 @@
           return { ok: false, error: 'unknown display mode: ' + String(args) }
         }
         editor.asc_SetDisplayModeInReview(Asc.c_oAscDisplayModeInReview[mode])
+      } else if (command === 'save') {
+        if (typeof window.AscDesktopEditor.LocalFileSave === 'function') window.AscDesktopEditor.LocalFileSave('')
+      } else if (command === 'reload') {
+        window.location.reload()
+        return { ok: true }
       } else {
         return { ok: false, error: 'unknown command: ' + String(command) }
       }
@@ -181,10 +197,10 @@
     var result = execReviewCommand(frame.command, frame.args)
     if (!result.ok) log('review command failed: ' + result.error)
     try {
-      fetch(API + '/editor', {
+      fetch(API + '/editor' + sessionQuery(), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: docId, revision: hostState.revision, command: frame.command, ok: result.ok }),
+        body: JSON.stringify({ id: docId, revision: hostState.revision, command: frame.command, ok: result.ok, requestId: frame.requestId, changeCount: 0 }),
       })
     } catch (e) {}
   }
@@ -227,7 +243,7 @@
 
   function subscribeEvents() {
     if (typeof EventSource !== 'function' || docId === '') return
-    var source = new EventSource(EVENTS)
+    var source = new EventSource(EVENTS + sessionQuery())
     source.onmessage = function (event) {
       var frame
       try { frame = JSON.parse(event.data) } catch (e) { return }
@@ -240,7 +256,11 @@
       if (frame.type === 'command') handleCommand(frame)
       else if (frame.type === 'document') handleDocument(frame)
       else if (frame.type === 'editor') handleEditor(frame)
-      else if (frame.type === 'conflict') reportConflict(frame.message || 'The document changed on disk.')
+      else if (frame.type === 'conflict') {
+        var framePath = typeof frame.path === 'string' ? frame.path : ''
+        if (hostPath !== '' && framePath !== '' && framePath.toLowerCase() !== hostPath.toLowerCase()) return
+        reportConflict(frame.message || 'The document changed on disk.')
+      }
     }
     // EventSource reconnects on its own; the snapshot frame follows every new connection.
     source.onerror = function () {}

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Unit tests for `ctx.docxModel` (`lib/model/model.js`) over a fake engine and a
  * fake document store: no Electron, x2t or DSH context.
  */
@@ -7,7 +7,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { MODEL_CODES, ModelError } from '../lib/model/model.js'
 
-import { DOCX, PATH, createFakeDocuments, createFakeEngine, createModel } from './fixtures.mjs'
+import { DOCX, PATH, createFakeDocuments, createFakeEngine, createModel, fixtureBlocks } from './fixtures.mjs'
 
 test('open returns a handle, content hash and read mode', async () => {
   const { model } = createModel()
@@ -127,6 +127,7 @@ test('commit refuses a dirty editor and a stale base, then writes through the st
   const { model, engine } = createModel({ documents })
   const opened = await model.open(PATH)
   await model.edit(opened.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'Edited text.' })
+  await model.diff(opened.handle)
 
   documents.state.modified = true
   await assert.rejects(
@@ -143,6 +144,7 @@ test('commit refuses a dirty editor and a stale base, then writes through the st
   documents.state.revision = 'r-1'
   await model.reload(opened.handle)
   await model.edit(opened.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'Edited text.' })
+  await model.diff(opened.handle)
   const committed = await model.commit(opened.handle)
   assert.equal(committed.applied, true)
   assert.equal(committed.revision, 'r-2')
@@ -241,6 +243,7 @@ test('merge applies non-conflicting fork changes to the parent by block id', asy
   assert.equal(merged.changed, true)
   const parentRead = await model.read(opened.handle, { mode: 'full' })
   assert.match(parentRead.text, /Filed on 10 November 2026\./)
+  await model.diff(opened.handle)
   const committed = await model.commit(opened.handle)
   assert.equal(committed.applied, true)
 })
@@ -288,4 +291,128 @@ test('merge refuses a handle that is not a fork of the parent', async () => {
     () => model.merge(opened.handle, [other.handle]),
     (error) => error.code === MODEL_CODES.INVALID_OP,
   )
+})
+test('a commit clears stale and moves the content hash (WD-011, WD-012)', async () => {
+  const documents = createFakeDocuments()
+  const { model } = createModel({ documents })
+  const opened = await model.open(PATH)
+  await model.edit(opened.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'Committed.' })
+  await model.diff(opened.handle)
+  const before = model.status()[0].contentHash
+  const committed = await model.commit(opened.handle)
+  const status = model.status()[0]
+  assert.equal(status.stale, false)
+  assert.notEqual(status.contentHash, before)
+  assert.equal(status.contentHash, committed.sha256)
+  assert.equal(model.rehydrate(status.contentHash).handle, opened.handle)
+  assert.throws(() => model.rehydrate(before), (error) => error.code === MODEL_CODES.SESSION_NOT_FOUND)
+  await model.edit(opened.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'Again.' })
+  await model.diff(opened.handle)
+  const second = await model.commit(opened.handle)
+  assert.equal(second.applied, true)
+  assert.equal(documents.state.applied.length, 2)
+})
+test('merge inserts before FIVE after another fork deletes ONE (WD-039)', async () => {
+  const engine = createFakeEngine(fixtureBlocks('F-CLEAN').blocks)
+  const { model } = createModel({ engine })
+  const opened = await model.open('C:/docs/F-CLEAN.docx')
+  const inserter = await model.fork(opened.handle, { label: 'inserter' })
+  const deleter = await model.fork(opened.handle, { label: 'deleter' })
+  await model.edit(inserter.handle, { type: 'insert_paragraph', index: 4, text: 'INSERT-A' })
+  await model.edit(deleter.handle, { type: 'delete_paragraph', blockId: 'w14:1', expectedText: 'ONE' })
+  const merged = await model.merge(opened.handle, [inserter.handle, deleter.handle])
+  assert.equal(merged.conflicts.length, 0)
+  const read = await model.read(opened.handle, { mode: 'full' })
+  assert.doesNotMatch(read.text, /ONE/)
+  const order = ['TWO', 'THREE', 'FOUR', 'INSERT-A', 'FIVE'].map((text) => read.text.indexOf(text))
+  assert.equal(order.every((index) => index >= 0), true)
+  assert.deepEqual([...order].sort((left, right) => left - right), order)
+})
+
+test('merge adopts a fork table row and a fork-created table (WD-040, WD-041)', async () => {
+  const engine = createFakeEngine(fixtureBlocks('F-TABLES').blocks)
+  const { model } = createModel({ engine })
+  const opened = await model.open('C:/docs/F-TABLES.docx')
+  const fork = await model.fork(opened.handle, { label: 'table-task' })
+  await model.edit(fork.handle, { type: 'insert_table_row', tableBlockId: 't:a1b2c3d4', cells: ['C', 'D'] })
+  const merged = await model.merge(opened.handle, [fork.handle])
+  assert.equal(merged.conflicts.length, 0, JSON.stringify(merged.conflicts))
+  const read = await model.read(opened.handle, { mode: 'full' })
+  assert.match(read.text, /\(table, 2 rows\)/)
+
+  const cleanEngine = createFakeEngine(fixtureBlocks('F-CLEAN').blocks)
+  const second = createModel({ engine: cleanEngine }).model
+  const cleanOpened = await second.open('C:/docs/F-CLEAN.docx')
+  const creator = await second.fork(cleanOpened.handle, { label: 'new-table' })
+  await second.edit(creator.handle, { type: 'insert_table_row', cells: ['X', 'Y'], create: true })
+  const cleanMerged = await second.merge(cleanOpened.handle, [creator.handle])
+  assert.equal(cleanMerged.conflicts.length, 0)
+  const diff = await second.diff(cleanOpened.handle)
+  assert.equal(diff.changes.some((change) => change.kind === 'table'), true)
+})
+
+test('merge adopts a fork-created list item (WD-042)', async () => {
+  const engine = createFakeEngine(fixtureBlocks('F-CLEAN').blocks)
+  const { model } = createModel({ engine })
+  const opened = await model.open('C:/docs/F-CLEAN.docx')
+  const fork = await model.fork(opened.handle, { label: 'list-task' })
+  await model.edit(fork.handle, { type: 'insert_list_item', afterBlockId: 'w14:5', text: 'ITEM', numbering: 'decimal', level: 0 })
+  const merged = await model.merge(opened.handle, [fork.handle])
+  assert.equal(merged.conflicts.length, 0)
+  assert.equal(merged.operations.some((operation) => operation.op === 'insert_list_item'), true)
+  const read = await model.read(opened.handle, { mode: 'full' })
+  assert.match(read.text, /ITEM/)
+})
+
+test('a failed merge op rolls back this call and reports apply-failed (WD-043, WD-044)', async () => {
+  const documents = createFakeDocuments()
+  const engine = createFakeEngine()
+  const { model } = createModel({ engine, documents })
+  const opened = await model.open(PATH)
+  const fork = await model.fork(opened.handle, { label: 'failing' })
+  await model.edit(fork.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'First.' })
+  await model.edit(fork.handle, { type: 'replace_paragraph', blockId: 'p:3', text: 'Second.' })
+  const original = engine.apply
+  let replacements = 0
+  engine.apply = async (...args) => {
+    if (args[1] && args[1].type === 'replace_paragraph' && ++replacements === 2) {
+      throw Object.assign(new Error('injected'), { code: 'ENGINE_INVALID_OP' })
+    }
+    return original(...args)
+  }
+  const merged = await model.merge(opened.handle, [fork.handle])
+  assert.equal(merged.applied, 0)
+  assert.equal(merged.conflicts.some((conflict) => conflict.reason === 'apply-failed'), true)
+  const read = await model.read(opened.handle, { mode: 'full' })
+  assert.doesNotMatch(read.text, /First\./)
+  assert.match(read.text, /Respectfully submitted\./)
+})
+
+test('commit contributors name the fork task label (WD-046)', async () => {
+  const documents = createFakeDocuments()
+  const { model } = createModel({ documents })
+  const opened = await model.open(PATH)
+  const fork = await model.fork(opened.handle, { label: 'contributor-task' })
+  await model.edit(fork.handle, { type: 'replace_paragraph', blockId: 'p:3', text: 'Contributed.' })
+  await model.merge(opened.handle, [fork.handle])
+  await model.diff(opened.handle)
+  const committed = await model.commit(opened.handle)
+  assert.equal(committed.applied, true)
+  const revisions = await model.revisions(opened.handle)
+  assert.deepEqual(revisions.commits[0].contributors, ['contributor-task'])
+})
+test('a commit without a preceding diff writes nothing (WD-126)', async () => {
+  const documents = createFakeDocuments()
+  const { model } = createModel({ documents })
+  const opened = await model.open(PATH)
+  await model.edit(opened.handle, { type: 'replace_paragraph', blockId: 'p:2', text: 'Unseen.' })
+  await assert.rejects(
+    () => model.commit(opened.handle),
+    (error) => error.code === MODEL_CODES.REVIEW_REQUIRED,
+  )
+  assert.equal(documents.state.applied.length, 0)
+  await model.diff(opened.handle)
+  const committed = await model.commit(opened.handle)
+  assert.equal(committed.applied, true)
+  assert.equal(documents.state.applied.length, 1)
 })

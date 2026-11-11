@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `workspace-legal-review` row: legal analyzers on `ctx.docxModel`, the
  * `doc_analyze` tool and the `legal-document-review` runtime skill.
  *
@@ -122,7 +122,6 @@ export function apply(ctx) {
   })
 
   // Exposed for the row README and tests: the stable code set this row can emit.
-  ctx.effect(() => ctx.provide('legalReview', { codes: LEGAL_ANALYZER_CODES, analyzers, playbook: PLAYBOOK }), 'workspace-legal-review.service')
 }
 
 export { ANALYZER_CODES }

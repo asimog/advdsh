@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Unit tests for the `doc_fanout` tool over the real model, a fake engine and a
  * fake subagent manager: fork per task, caller delivery, bounded concurrency,
  * failure isolation, merge by block id and teardown.
@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { apply as applyFanout } from '../lib/fanout/index.js'
+import { createRoleRegistry } from '../lib/roles.js'
 import { createModel, PATH } from './fixtures.mjs'
 
 /** Minimal output-schema check for the canonical value. */
@@ -46,7 +47,7 @@ function createFakeSubagents({ onTask, depthLimit = true } = {}) {
       : undefined),
     resolveMaxDepth: (value) => {
       state.resolveMaxDepth.push(value)
-      return value
+      return value ?? 3
     },
     async startActivation(spec) {
       state.starts.push(spec)
@@ -80,6 +81,7 @@ function createFakeCtx(model, subagents) {
   const disposers = []
   const ctx = {
     docxModel: model,
+    docxRoles: createRoleRegistry(),
     subagents,
     tools: { register: (definition) => { tools.set(definition.name, definition); return () => tools.delete(definition.name) } },
     effect: (fn) => {
@@ -134,7 +136,7 @@ test('doc_fanout forks per task, runs caller children, merges and closes forks',
   assert.equal(subagents.state.starts.length, 2)
   assert.equal(subagents.state.starts[0].provider, 'spawn')
   assert.equal(subagents.state.starts[0].delivery, 'caller')
-  assert.equal(subagents.state.starts[0].request.maxDepth, 1)
+  assert.equal(subagents.state.starts[0].request.maxDepth, 3)
   assert.equal(subagents.state.starts[0].request.cwd, 'C:/docs')
   assert.match(subagents.state.starts[0].request.prompt[0].text, /isolated fork/)
   assert.equal(subagents.state.disposed, 2)
@@ -238,4 +240,87 @@ test('disposing the row unregisters the tool and disposes activations', async ()
   assert.ok(tools.has('doc_fanout'))
   for (const dispose of disposers) dispose()
   assert.equal(tools.has('doc_fanout'), false)
+})
+test('doc_fanout refuses at the deployment depth limit (WD-050)', async () => {
+  const { model } = createModel()
+  const opened = await model.open(PATH)
+  const subagents = createFakeSubagents({ depthLimit: true })
+  const { tools } = createFakeCtx(model, subagents)
+  await assert.rejects(
+    () => tools.get('doc_fanout').execute({
+      doc: opened.handle,
+      tasks: [{ label: 'too-deep', prompt: 'Edit.' }],
+    }, execFacts({ delegationDepth: 3 })),
+    (error) => error.code === 'DOC_FANOUT_DEPTH',
+  )
+  assert.equal(subagents.state.starts.length, 0)
+  assert.equal(model.status().length, 1)
+})
+test('doc_fanout refuses overlapping apply chunks before any child starts (WD-120)', async () => {
+  const { model } = createModel()
+  const opened = await model.open(PATH)
+  const subagents = createFakeSubagents({})
+  const { tools } = createFakeCtx(model, subagents)
+  await assert.rejects(
+    () => tools.get('doc_fanout').execute({
+      doc: opened.handle,
+      tasks: [
+        { label: 'one', prompt: 'Edit.', kind: 'apply', blockIds: ['w14:2'] },
+        { label: 'two', prompt: 'Edit.', kind: 'apply', blockIds: ['w14:2'] },
+      ],
+    }, execFacts()),
+    (error) => error.code === 'DOC_INVALID_ARGS',
+  )
+  assert.equal(subagents.state.starts.length, 0)
+})
+
+test('the child prompt carries the proposals and constraints (WD-118, WD-121)', async () => {
+  const { model } = createModel()
+  const opened = await model.open(PATH)
+  const subagents = createFakeSubagents({})
+  const { tools } = createFakeCtx(model, subagents)
+  await tools.get('doc_fanout').execute({
+    doc: opened.handle,
+    constraints: 'Use Buyer, not Purchaser.',
+    tasks: [{
+      label: 'apply-one',
+      prompt: 'Apply the proposal.',
+      kind: 'apply',
+      blockIds: ['p:2'],
+      changes: [{ id: 'c1', kind: 'replace', blockId: 'p:2', expectedText: 'Plaintiff seeks entry of an ex parte temporary restraining order.', newText: 'TWO-A' }],
+    }],
+  }, execFacts())
+  const prompt = subagents.state.starts[0].request.prompt[0].text
+  assert.match(prompt, /"id":"c1"/)
+  assert.match(prompt, /"newText":"TWO-A"/)
+  assert.match(prompt, /Use Buyer, not Purchaser\./)
+})
+
+test('doc_fanout reports each apply proposal status from the live parent (WD-124)', async () => {
+  const { model } = createModel()
+  const opened = await model.open(PATH)
+  const subagents = createFakeSubagents({
+    onTask: async (spec) => {
+      const fork = forkOf(spec.request.prompt)
+      await model.edit(fork, { type: 'replace_paragraph', blockId: 'p:2', text: 'TWO-A' })
+    },
+  })
+  const { tools } = createFakeCtx(model, subagents)
+  const value = await tools.get('doc_fanout').execute({
+    doc: opened.handle,
+    tasks: [{
+      label: 'apply-one',
+      prompt: 'Apply c1.',
+      kind: 'apply',
+      blockIds: ['p:2', 'p:3'],
+      changes: [
+        { id: 'c1', kind: 'replace', blockId: 'p:2', expectedText: 'Plaintiff seeks entry of an ex parte temporary restraining order.', newText: 'TWO-A' },
+        { id: 'c2', kind: 'replace', blockId: 'p:3', expectedText: 'Respectfully submitted.', newText: 'FOUR-A' },
+      ],
+    }],
+  }, execFacts())
+  assert.deepEqual(value.changes, [
+    { id: 'c1', status: 'applied' },
+    { id: 'c2', status: 'not-applied' },
+  ])
 })

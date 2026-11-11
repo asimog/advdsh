@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Client half of the workspace editor plugin (hand-authored dynamic bundle).
  *
  * Stage 3's empty tab becomes the Stage 6 document editor: a right-sidebar tab
@@ -39,38 +39,36 @@ window.__ModuleLoader__.load({
       'copy.failed': 'Could not copy the selection.',
     }
     const hi = {
-      'tab.title': 'संपादक',
-      'guide.title': 'संपादक',
-      'guide.description': 'संपादन के लिए वर्ड दस्तावेज़ या पीडीएफ़ खोलें',
-      empty: 'कोई दस्तावेज़ खुला नहीं है',
-      edit: 'संपादित करें',
-      reload: 'फिर लोड करें',
-      'exportPdf': 'पीडीएफ़ निर्यात',
-      opening: 'दस्तावेज़ खुल रहा है...',
-      failed: 'दस्तावेज़ नहीं खुल सका',
-      'waiting': '.docx या .pdf पूर्वावलोकन खोलें और संपादित करें चुनें।',
-      'menu.sendToChat': 'चैट में भेजें',
-      'menu.askAgent': 'एजेंट से पूछें',
-      'menu.copy': 'कॉपी करें',
-      'menu.failed': 'मेनू कार्रवाई पूरी नहीं हो सकी।',
-      'stage.source': '`{path}` से संशोधन {revision} पर।',
-      'stage.dirty': '(संपादक में सहेजे न गए बदलाव हैं)',
-      'stage.unavailable': 'यह चैट अभी उपलब्ध नहीं है।',
-      'stage.failed': 'कंपोज़र व्यस्त है; चयन जमा नहीं किया गया।',
-      'copy.failed': 'चयन कॉपी नहीं हो सका।',
+      'tab.title': 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤•',
+      'guide.title': 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤•',
+      'guide.description': 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤¨ à¤•à¥‡ à¤²à¤¿à¤ à¤µà¤°à¥à¤¡ à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤¯à¤¾ à¤ªà¥€à¤¡à¥€à¤à¤«à¤¼ à¤–à¥‹à¤²à¥‡à¤‚',
+      empty: 'à¤•à¥‹à¤ˆ à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤–à¥à¤²à¤¾ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆ',
+      edit: 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤¿à¤¤ à¤•à¤°à¥‡à¤‚',
+      reload: 'à¤«à¤¿à¤° à¤²à¥‹à¤¡ à¤•à¤°à¥‡à¤‚',
+      'exportPdf': 'à¤ªà¥€à¤¡à¥€à¤à¤«à¤¼ à¤¨à¤¿à¤°à¥à¤¯à¤¾à¤¤',
+      opening: 'à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤–à¥à¤² à¤°à¤¹à¤¾ à¤¹à¥ˆ...',
+      failed: 'à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤¨à¤¹à¥€à¤‚ à¤–à¥à¤² à¤¸à¤•à¤¾',
+      'waiting': '.docx à¤¯à¤¾ .pdf à¤ªà¥‚à¤°à¥à¤µà¤¾à¤µà¤²à¥‹à¤•à¤¨ à¤–à¥‹à¤²à¥‡à¤‚ à¤”à¤° à¤¸à¤‚à¤ªà¤¾à¤¦à¤¿à¤¤ à¤•à¤°à¥‡à¤‚ à¤šà¥à¤¨à¥‡à¤‚à¥¤',
+      'menu.sendToChat': 'à¤šà¥ˆà¤Ÿ à¤®à¥‡à¤‚ à¤­à¥‡à¤œà¥‡à¤‚',
+      'menu.askAgent': 'à¤à¤œà¥‡à¤‚à¤Ÿ à¤¸à¥‡ à¤ªà¥‚à¤›à¥‡à¤‚',
+      'menu.copy': 'à¤•à¥‰à¤ªà¥€ à¤•à¤°à¥‡à¤‚',
+      'menu.failed': 'à¤®à¥‡à¤¨à¥‚ à¤•à¤¾à¤°à¥à¤°à¤µà¤¾à¤ˆ à¤ªà¥‚à¤°à¥€ à¤¨à¤¹à¥€à¤‚ à¤¹à¥‹ à¤¸à¤•à¥€à¥¤',
+      'stage.source': '`{path}` à¤¸à¥‡ à¤¸à¤‚à¤¶à¥‹à¤§à¤¨ {revision} à¤ªà¤°à¥¤',
+      'stage.dirty': '(à¤¸à¤‚à¤ªà¤¾à¤¦à¤• à¤®à¥‡à¤‚ à¤¸à¤¹à¥‡à¤œà¥‡ à¤¨ à¤—à¤ à¤¬à¤¦à¤²à¤¾à¤µ à¤¹à¥ˆà¤‚)',
+      'stage.unavailable': 'à¤¯à¤¹ à¤šà¥ˆà¤Ÿ à¤…à¤­à¥€ à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤',
+      'stage.failed': 'à¤•à¤‚à¤ªà¥‹à¤œà¤¼à¤° à¤µà¥à¤¯à¤¸à¥à¤¤ à¤¹à¥ˆ; à¤šà¤¯à¤¨ à¤œà¤®à¤¾ à¤¨à¤¹à¥€à¤‚ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾à¥¤',
+      'copy.failed': 'à¤šà¤¯à¤¨ à¤•à¥‰à¤ªà¥€ à¤¨à¤¹à¥€à¤‚ à¤¹à¥‹ à¤¸à¤•à¤¾à¥¤',
     }
 
-    /** Last document requested through the Edit action; page params are the fallback. */
-    let lastPath = ''
-    /** Document the mounted tab currently shows, so closing it can free the Host session. */
-    let currentDocId = ''
-    const LAST_PATH_KEY = 'workspace-editor.lastPath'
+    /** Host document id per tab address, so closing one tab closes only its document. */
+    const docIds = new Map()
 
-    const readLastPath = () => {
-      try { return window.localStorage.getItem(LAST_PATH_KEY) ?? '' } catch { return '' }
-    }
-    const rememberPath = (path) => {
-      try { window.localStorage.setItem(LAST_PATH_KEY, path) } catch {}
+    /** @param {string} path - absolute document path. @returns {string} resource address. */
+    const toAddress = (path) => `dsh-resource://file/absolute/${String(path).replace(/\\/g, '/')}`
+    /** @param {string} address - resource address. @returns {string} absolute document path. */
+    const pathFromAddress = (address) => {
+      const prefix = 'dsh-resource://file/absolute/'
+      return typeof address === 'string' && address.startsWith(prefix) ? address.slice(prefix.length) : ''
     }
 
     const styles = {
@@ -87,6 +85,12 @@ window.__ModuleLoader__.load({
         font: 'inherit', cursor: 'pointer',
       },
       frame: { flex: 1, width: '100%', border: '0', background: '#1e1e2e' },
+      banner: {
+        display: 'flex', gap: '6px', alignItems: 'center', padding: '6px 8px',
+        fontSize: '12px', color: 'var(--dsw-alias-label-primary)',
+        background: 'var(--dsw-alias-bg-warning, #4a3a12)',
+        borderBottom: '1px solid var(--dsw-alias-border-secondary)',
+      },
       message: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '16px', fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)', textAlign: 'center' },
     }
 
@@ -102,11 +106,16 @@ window.__ModuleLoader__.load({
       const t = typeof props.t === 'function' ? props.t : (key) => key
       const openSelectionMenu = typeof props.openSelectionMenu === 'function' ? props.openSelectionMenu : undefined
       const info = typeof props.useTabInfo === 'function' ? props.useTabInfo() : undefined
-      const params = info?.tab?.navigation?.params
-      const wanted = (params && typeof params.path === 'string' && params.path !== '' ? params.path : '') || lastPath || readLastPath()
+      const address = (info?.tab?.navigation?.address ?? info?.tab?.contentId) || ''
+      const wanted = pathFromAddress(address)
+      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
+      const routeUrl = (suffix) => sessionId === ''
+        ? `${ROUTE}${suffix}`
+        : `${ROUTE}${suffix}${suffix.includes('?') ? '&' : '?'}session=${encodeURIComponent(sessionId)}`
 
       const [doc, setDoc] = react.useState(undefined)
       const [failure, setFailure] = react.useState('')
+      const [conflict, setConflict] = react.useState(undefined)
       const [busy, setBusy] = react.useState(false)
       const [reloadToken, setReloadToken] = react.useState(0)
       const [loadedMtime, setLoadedMtime] = react.useState(0)
@@ -119,7 +128,8 @@ window.__ModuleLoader__.load({
         let live = true
         setBusy(true)
         setFailure('')
-        fetch(`${ROUTE}/api/open`, {
+        setConflict(undefined)
+        fetch(routeUrl('/api/open'), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ path: wanted }),
@@ -128,9 +138,8 @@ window.__ModuleLoader__.load({
           .then(async (opened) => {
             if (!live) return
             docRef.current = opened
-            currentDocId = opened.id
-            rememberPath(wanted)
-            const state = await readJson(await fetch(`${ROUTE}/api/info?id=${encodeURIComponent(opened.id)}`))
+            docIds.set(address, opened.id)
+            const state = await readJson(await fetch(routeUrl(`/api/info?id=${encodeURIComponent(opened.id)}`)))
             if (!live) return
             setDoc({ ...opened, path: typeof state.path === 'string' && state.path !== '' ? state.path : wanted })
             setLoadedMtime(state.mtimeMs ?? 0)
@@ -159,7 +168,7 @@ window.__ModuleLoader__.load({
           const rect = frame.getBoundingClientRect()
           openSelectionMenu({
             path: typeof doc.path === 'string' && doc.path !== '' ? doc.path : wanted,
-            revision: loadedRevision !== '' ? loadedRevision : loadedMtime,
+            revision: loadedRevision !== '' ? loadedRevision : undefined,
             text: data.text,
             dirty: data.dirty === true,
           }, { x: rect.left + data.x, y: rect.top + data.y })
@@ -173,7 +182,7 @@ window.__ModuleLoader__.load({
         if (doc === undefined) return undefined
         const timer = setInterval(() => {
           if (typeof document !== 'undefined' && document.hidden) return
-          fetch(`${ROUTE}/api/info?id=${encodeURIComponent(doc.id)}`)
+          fetch(routeUrl(`/api/info?id=${encodeURIComponent(doc.id)}`))
             .then(readJson)
             .then((state) => {
               if (state.modified === true) return
@@ -212,11 +221,11 @@ window.__ModuleLoader__.load({
             : (frame.document && typeof frame.document.path === 'string' ? frame.document.path : '')
           if (framePath !== '' && framePath.toLowerCase() !== String(doc.path || '').toLowerCase()) return
           if (frame.type === 'conflict') {
-            setFailure(typeof frame.code === 'string' ? frame.code : 'conflict')
+            setConflict({ code: typeof frame.code === 'string' ? frame.code : 'conflict', path: framePath })
             return
           }
           if (frame.type !== 'document' || frame.reload !== true) return
-          fetch(`${ROUTE}/api/info?id=${encodeURIComponent(doc.id)}`)
+          fetch(routeUrl(`/api/info?id=${encodeURIComponent(doc.id)}`))
             .then(readJson)
             .then((state) => {
               if (state.modified === true) return
@@ -231,6 +240,19 @@ window.__ModuleLoader__.load({
         return () => { try { source.close() } catch (error) {} }
       }, [doc])
 
+      const reloadNow = () => {
+        setConflict(undefined)
+        setFailure('')
+        setReloadToken((value) => value + 1)
+      }
+      const banner = conflict === undefined ? null : react.createElement(
+        'div',
+        { style: styles.banner },
+        react.createElement('span', { style: styles.name }, `The file changed on disk: ${conflict.path || (doc && doc.path) || wanted}.`),
+        react.createElement('button', { type: 'button', style: styles.button, onClick: reloadNow }, t('reload')),
+        react.createElement('button', { type: 'button', style: styles.button, onClick: () => setConflict(undefined) }, 'Dismiss'),
+      )
+
       const header = react.createElement(
         'div',
         { style: styles.bar },
@@ -238,11 +260,11 @@ window.__ModuleLoader__.load({
         doc === undefined ? null : react.createElement('button', {
           type: 'button',
           style: styles.button,
-          onClick: () => { setReloadToken((value) => value + 1) },
+          onClick: reloadNow,
         }, t('reload')),
         doc === undefined ? null : react.createElement('a', {
           style: styles.button,
-          href: `${ROUTE}/api/pdf?id=${encodeURIComponent(doc.id)}`,
+          href: routeUrl(`/api/pdf?id=${encodeURIComponent(doc.id)}`),
           target: '_blank',
           rel: 'noreferrer',
         }, t('exportPdf')),
@@ -257,13 +279,14 @@ window.__ModuleLoader__.load({
         body = react.createElement('iframe', {
           key: `${doc.id}:${reloadToken}`,
           ref: frameRef,
-          src: `${ROUTE}/host.html?doc=${encodeURIComponent(doc.id)}&rev=${reloadToken}`,
+          src: routeUrl(`/host.html?doc=${encodeURIComponent(doc.id)}&rev=${reloadToken}&path=${encodeURIComponent(doc.path)}`),
+          sandbox: 'allow-scripts allow-same-origin allow-forms allow-downloads',
           style: styles.frame,
           title: doc.name,
         })
       }
 
-      return react.createElement('div', { 'data-workspace-editor': doc === undefined ? 'empty' : doc.kind, style: styles.root }, header, body)
+      return react.createElement('div', { 'data-workspace-editor': doc === undefined ? 'empty' : doc.kind, style: styles.root }, header, banner, body)
     }
 
     /** Edit action shown on .docx and .pdf preview tabs. */
@@ -288,9 +311,8 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const t = ctx.locale.bind(NAMESPACE)
       const openEditor = (path) => {
-        lastPath = path
         try {
-          ctx.sidebarRight.openTab(KIND, { params: { path } })
+          ctx.sidebarRight.openResource(toAddress(path))
         } catch (error) {
           console.error('[workspace-editor] open failed', error)
         }
@@ -298,7 +320,7 @@ window.__ModuleLoader__.load({
       const EditAction = makeEditAction(openEditor)
 
       const quoteLimit = 8000
-      const truncate = (text) => text.length <= quoteLimit ? text : `${text.slice(0, quoteLimit)}…`
+      const truncate = (text) => text.length <= quoteLimit ? text : `${text.slice(0, quoteLimit)}â€¦`
       const quoteFor = (value) => {
         const body = truncate(value.text).split('\n').map((line) => `> ${line}`).join('\n')
         const source = t('stage.source', { path: value.path, revision: String(value.revision) })
@@ -382,11 +404,44 @@ window.__ModuleLoader__.load({
           ]
         },
       }), 'workspace-editor.selection-menu')
+      ctx.effect(() => {
+        const timers = new Map()
+        const poll = (sessionId) => {
+          if (timers.has(sessionId)) return
+          const tick = async () => {
+            try {
+              const response = await fetch(`${ROUTE}/api/pending-open?session=${encodeURIComponent(sessionId)}`)
+              if (!response.ok) return
+              const body = await response.json()
+              for (const path of Array.isArray(body.paths) ? body.paths : []) openEditor(path)
+            } catch {}
+          }
+          void tick()
+          timers.set(sessionId, setInterval(() => { void tick() }, 1500))
+        }
+        const scan = () => {
+          try {
+            const byId = ctx.sessions?.list?.getSnapshot?.().byId ?? {}
+            for (const sessionId of Object.keys(byId)) poll(sessionId)
+          } catch {}
+        }
+        const stop = ctx.sessions?.list?.subscribe?.(scan)
+        scan()
+        return () => {
+          if (typeof stop === 'function') stop()
+          for (const timer of timers.values()) clearInterval(timer)
+        }
+      }, 'workspace-editor.open-stream')
       ctx.effect(() => ctx.sidebarRightTabs.register({
         id: KIND,
         kind: KIND,
         keepMounted: true,
-        title: () => t('tab.title'),
+        patterns: ['dsh-resource://file/**'],
+        canOpen: (address) => /\.(docx?|pdf)$/i.test(pathFromAddress(address)),
+        title: (address) => {
+          const file = pathFromAddress(address)
+          return file === '' ? t('tab.title') : file.slice(Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')) + 1)
+        },
         guide: [{
           id: 'workspace-editor.open',
           order: 40,
@@ -399,6 +454,7 @@ window.__ModuleLoader__.load({
         key: KIND,
         locale: NAMESPACE,
         inject: (sessionId) => ({
+          sessionId,
           openSelectionMenu: (selection, point) => { openSelectionMenu(sessionId, selection, point) },
         }),
       }, EditorBody)), 'workspace-editor.body')
@@ -408,11 +464,12 @@ window.__ModuleLoader__.load({
         locale: NAMESPACE,
       }, EditAction)), 'workspace-editor.action')
       // Closing the tab frees the Host session: Editor.bin, media and temp files.
-      ctx.effect(() => ctx.sidebarRight.registerCloseHandler(KIND, () => {
-        const id = currentDocId
-        currentDocId = ''
+      ctx.effect(() => ctx.sidebarRight.registerCloseHandler(KIND, (_sessionId, tab) => {
+        const address = (tab && (tab.contentId ?? tab.navigation?.address)) || ''
+        const id = docIds.get(address) ?? ''
+        docIds.delete(address)
         if (id !== '') {
-          void fetch(`${ROUTE}/api/close?id=${encodeURIComponent(id)}`, { method: 'POST' }).catch(() => {})
+          void fetch(`${ROUTE}/api/close?id=${encodeURIComponent(id)}&session=${encodeURIComponent(_sessionId ?? '')}`, { method: 'POST' }).catch(() => {})
         }
       }), 'workspace-editor.close')
     }
@@ -421,3 +478,5 @@ window.__ModuleLoader__.load({
     return module.exports
   },
 })
+
+

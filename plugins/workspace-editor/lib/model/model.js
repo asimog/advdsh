@@ -1,4 +1,4 @@
-/**
+﻿/**
  * `ctx.docxModel` core: agent document sessions over `ctx.docxEngine`.
  *
  * Sessions are keyed by absolute path + content hash, so a reopen after a human
@@ -18,6 +18,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { ERROR_CODES, toolCodeForEngine } from '../errors.js'
 import { commitEligibility, markDiffSeen, noteDiffInvalidated, operationContract, sessionContract } from './session-contract.js'
+import { buildMarkupView } from './blocks.js'
+import { outlineOf } from '../outline.js'
+import { resolveDocumentPath } from '../scope.js'
 
 /** Stable codes for tool results; the message is for the operator. */
 export const MODEL_CODES = Object.freeze({
@@ -38,6 +41,7 @@ export const MODEL_CODES = Object.freeze({
   COMMIT_FAILED: ERROR_CODES.COMMIT_FAILED,
   FORKED_COMMIT: ERROR_CODES.FORKED_COMMIT,
   UNDO_UNAVAILABLE: ERROR_CODES.UNDO_UNAVAILABLE,
+  REVIEW_REQUIRED: ERROR_CODES.REVIEW_REQUIRED,
   OPEN_FAILED: 'DOC_OPEN_FAILED',
 })
 
@@ -65,18 +69,37 @@ export const SUPPORTED_OPS = Object.freeze([
   'insert_list_item',
   'insert_table_row',
   'delete_table_row',
+  'set_run_props',
+  'set_run_text',
+  'split_run',
+  'merge_runs',
+  'set_paragraph_props',
+  'set_cell_text',
+  'insert_table_column',
+  'delete_table_column',
+  'set_section_props',
 ])
 
 /** Read modes `doc_read` accepts. */
-export const READ_MODES = Object.freeze(['auto', 'full', 'outline', 'range', 'search', 'context'])
+export const READ_MODES = Object.freeze(['auto', 'full', 'outline', 'range', 'search', 'context', 'markup'])
 
 const OP_FIELDS = Object.freeze({
   replace_paragraph: { text: 'string', blockId: 'string', index: 'number', expectedText: 'string' },
-  insert_paragraph: { text: 'string', index: 'number' },
+  insert_paragraph: { text: 'string', index: 'number', style: 'string' },
   delete_paragraph: { blockId: 'string', index: 'number', expectedText: 'string' },
   insert_list_item: { text: 'string', numbering: 'string', level: 'number', index: 'number' },
   insert_table_row: { tableBlockId: 'string', tableIndex: 'number', cells: 'array', create: 'boolean' },
   delete_table_row: { blockId: 'string', index: 'number', rowIndex: 'number' },
+  set_run_props: { blockId: 'string', index: 'number', runIndex: 'number', expectedText: 'string', props: 'object' },
+  set_run_text: { blockId: 'string', index: 'number', runIndex: 'number', expectedText: 'string', text: 'string' },
+  split_run: { blockId: 'string', index: 'number', runIndex: 'number', expectedText: 'string', offset: 'number' },
+  merge_runs: { blockId: 'string', index: 'number', runIndex: 'number', expectedText: 'string' },
+  set_paragraph_props: { blockId: 'string', index: 'number', expectedText: 'string', props: 'object' },
+  set_cell_text: { tableBlockId: 'string', tableIndex: 'number', rowIndex: 'number', columnIndex: 'number', expectedText: 'string', text: 'string' },
+  insert_table_column: { tableBlockId: 'string', tableIndex: 'number', columnIndex: 'number', cells: 'array' },
+  delete_table_column: { tableBlockId: 'string', tableIndex: 'number', columnIndex: 'number' },
+  set_section_props: { sectionIndex: 'number', props: 'object' },
+  replace_text: { find: 'string', replace: 'string', blockId: 'string', index: 'number', expectedText: 'string' },
 })
 
 /** @param {unknown} value - candidate bytes. @returns {Buffer} */
@@ -112,25 +135,10 @@ function estimateTokens(text) {
 /** @param {string} text - block text. @param {number} limit - character cap. @returns {string} */
 function clip(text, limit = 500) {
   const value = typeof text === 'string' ? text : ''
-  return value.length <= limit ? value : `${value.slice(0, limit)}…`
+  return value.length <= limit ? value : `${value.slice(0, limit)}â€¦`
 }
 
 /** Heading rows derived from paragraph style/level. */
-function outlineOf(blocks) {
-  const outline = []
-  for (const block of blocks) {
-    if (block.kind !== 'paragraph') continue
-    const style = typeof block.style === 'string' ? block.style : ''
-    let level = Number.isFinite(block.level) ? block.level : undefined
-    if (level === undefined) {
-      const match = /^heading\s*([1-9])$/i.exec(style)
-      if (match) level = Number(match[1]) - 1
-    }
-    if (level === undefined) continue
-    outline.push({ id: block.id, index: block.index, level, text: block.text })
-  }
-  return outline
-}
 
 /** One annotated block line for model reads. */
 function formatBlock(block) {
@@ -213,6 +221,9 @@ export function validateOp(op) {
     if (kind === 'boolean' && typeof value !== 'boolean') {
       throw new ModelError(MODEL_CODES.INVALID_OP, `${op.type}.${field} must be a boolean`)
     }
+    if (kind === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+      throw new ModelError(MODEL_CODES.INVALID_OP, `${op.type}.${field} must be an object`)
+    }
     engineOp[field] = value
   }
   if (op.type === 'replace_paragraph' && typeof engineOp.text !== 'string') {
@@ -223,6 +234,28 @@ export function validateOp(op) {
   }
   if (op.type === 'insert_list_item' && typeof engineOp.text !== 'string') {
     throw new ModelError(MODEL_CODES.INVALID_OP, 'insert_list_item needs text')
+  }
+  const runOps = ['set_run_props', 'set_run_text', 'split_run', 'merge_runs']
+  if (runOps.includes(op.type) && !Number.isFinite(engineOp.runIndex)) {
+    throw new ModelError(MODEL_CODES.INVALID_OP, `${op.type} needs runIndex`)
+  }
+  if ((runOps.includes(op.type) || op.type === 'set_paragraph_props') && engineOp.blockId === undefined && engineOp.index === undefined) {
+    throw new ModelError(MODEL_CODES.INVALID_OP, `${op.type} needs blockId or index`)
+  }
+  if (op.type === 'set_run_text' && typeof engineOp.text !== 'string') {
+    throw new ModelError(MODEL_CODES.INVALID_OP, 'set_run_text needs text')
+  }
+  if (op.type === 'split_run' && !Number.isFinite(engineOp.offset)) {
+    throw new ModelError(MODEL_CODES.INVALID_OP, 'split_run needs offset')
+  }
+  if (op.type === 'replace_text' && (typeof engineOp.find !== 'string' || engineOp.find === '')) {
+    throw new ModelError(MODEL_CODES.INVALID_OP, 'replace_text needs find')
+  }
+  if (op.type === 'set_cell_text' && (typeof engineOp.text !== 'string' || !Number.isFinite(engineOp.rowIndex) || !Number.isFinite(engineOp.columnIndex))) {
+    throw new ModelError(MODEL_CODES.INVALID_OP, 'set_cell_text needs text, rowIndex and columnIndex')
+  }
+  if ((op.type === 'insert_table_column' || op.type === 'delete_table_column') && !Number.isFinite(engineOp.columnIndex)) {
+    throw new ModelError(MODEL_CODES.INVALID_OP, `${op.type} needs columnIndex`)
   }
   if (engineOp.blockId === undefined && engineOp.index === undefined
     && ['replace_paragraph', 'delete_paragraph', 'delete_table_row'].includes(op.type)) {
@@ -440,6 +473,7 @@ export function createDocxModel(options) {
     session.opLog = []
     session.diffSeenOps = 0
     session.diffSeenAt = null
+    session.contentHash = sha256(bytes)
     invalidate(session)
     const description = await describeSession(session)
     session.baseBlocks = description.blocks
@@ -484,15 +518,25 @@ export function createDocxModel(options) {
       if (absolute === undefined && bytes === undefined) {
         throw new ModelError(MODEL_CODES.INVALID_OP, 'doc_open needs a path or bytes')
       }
+      if (absolute !== undefined && typeof openOptions.cwd === 'string' && openOptions.cwd !== '') {
+        try {
+          absolute = await resolveDocumentPath(absolute, { cwd: openOptions.cwd, roots: openOptions.roots ?? [] })
+        } catch (error) {
+          if (error && error.code === ERROR_CODES.OUTSIDE_WORKSPACE) {
+            throw new ModelError(MODEL_CODES.OUTSIDE_WORKSPACE, error.message, { cause: error })
+          }
+          throw error
+        }
+      }
+      const ownerSessionId = typeof openOptions.sessionId === 'string' && openOptions.sessionId !== ''
+        ? openOptions.sessionId
+        : (typeof openOptions.ownerSessionId === 'string' ? openOptions.ownerSessionId : '')
       let docView
-      if (documents !== undefined && absolute !== undefined) docView = await documents.open(absolute)
+      if (documents !== undefined && absolute !== undefined) docView = await documents.open(absolute, { cwd: openOptions.cwd, sessionId: ownerSessionId })
       if (bytes === undefined) {
         bytes = await readFileImpl(docView?.path ?? absolute)
       }
       const contentHash = sha256(bytes)
-      const ownerSessionId = typeof openOptions.sessionId === 'string' && openOptions.sessionId !== ''
-        ? openOptions.sessionId
-        : (typeof openOptions.ownerSessionId === 'string' ? openOptions.ownerSessionId : '')
       const key = `${ownerSessionId}\n${pathKey(absolute ?? name ?? 'document')}\n${contentHash}`
       const existingHandle = byKey.get(key)
       if (existingHandle !== undefined) {
@@ -511,6 +555,7 @@ export function createDocxModel(options) {
       const session = {
         handle,
         ownerSessionId,
+        cwd: typeof openOptions.cwd === 'string' ? openOptions.cwd : '',
         path: absolute ?? fileName,
         name: fileName,
         contentHash,
@@ -628,6 +673,15 @@ export function createDocxModel(options) {
         }
         return { ...base, blocks, text: blocks.map(formatBlock).join('\n'), truncated: false }
       }
+      if (mode === 'markup') {
+        const view = buildMarkupView({ blocks, sections: description.sections }, {
+          from: readOptions.from,
+          to: readOptions.to,
+          limitNodes: readOptions.limitNodes,
+          limitTokens: readOptions.limitTokens,
+        })
+        return { ...base, mode: 'markup', schema: view.schema, nodes: view.nodes, text: '', truncated: view.truncated, next: view.next }
+      }
       if (mode === 'outline') {
         return {
           ...base,
@@ -673,7 +727,7 @@ export function createDocxModel(options) {
             id: block.id,
             index: block.index,
             kind: block.kind,
-            snippet: clip(`${start > 0 ? '…' : ''}${block.text.slice(start, start + 220)}`, 240),
+            snippet: clip(`${start > 0 ? 'â€¦' : ''}${block.text.slice(start, start + 220)}`, 240),
           })
           if (matches.length >= limit) break
         }
@@ -715,6 +769,11 @@ export function createDocxModel(options) {
     async edit(handle, op, editOptions = {}) {
       const session = requireSession(handle)
       assertWritesAllowed()
+      if (session.stale === true) {
+        throw new ModelError(MODEL_CODES.STALE_BASE, 'the document changed on disk since this session opened; reload it before editing', {
+          details: { baseRevision: session.baseRevision },
+        })
+      }
 
       const normalized = validateOp(op)
       const engineOp = { ...normalized.engineOp }
@@ -739,6 +798,10 @@ export function createDocxModel(options) {
         textAfter: entry.textAfter === null || entry.textAfter === undefined ? null : clip(entry.textAfter),
       }))
       const description = await describeSession(session).catch(() => undefined)
+      const resultFacts = result.facts && typeof result.facts === 'object' ? result.facts : result
+      if (resultFacts && typeof resultFacts.tableId === 'string' && !affected.some((item) => item.id === resultFacts.tableId)) {
+        affected.push({ id: resultFacts.tableId, index: null, kind: 'table', textBefore: null, textAfter: null })
+      }
       const entry = {
         seq: session.opLog.length + 1,
         type: normalized.type,
@@ -747,6 +810,7 @@ export function createDocxModel(options) {
         tracked: result.tracked !== false,
         revision: session.revision,
         at: now().toISOString(),
+        task: typeof editOptions.task === 'string' ? editOptions.task : null,
         inverse: inverseOf(normalized.type, engineOp, result, description),
       }
       session.opLog.push(entry)
@@ -759,6 +823,8 @@ export function createDocxModel(options) {
         tracked: entry.tracked,
         affected,
         changed: affected.length,
+        blocksChanged: affected.length,
+        blocksTotal: Array.isArray(description?.blocks) ? description.blocks.length : 0,
       }
     },
 
@@ -815,6 +881,10 @@ export function createDocxModel(options) {
         after: change.after === undefined ? null : clip(change.after.text ?? ''),
       }))
       markDiffSeen(session)
+      let backups = []
+      if (documents !== undefined && typeof documents.history === 'function' && session.documentId !== undefined) {
+        try { backups = await documents.history(session.documentId) } catch (error) { backups = [] }
+      }
       return {
         handle: session.handle,
         path: session.path,
@@ -823,6 +893,8 @@ export function createDocxModel(options) {
         baseRevision: session.baseRevision,
         changes,
         counts: raw.counts,
+        blocksChanged: changes.length,
+        blocksTotal: Array.isArray(session.baseBlocks) ? session.baseBlocks.length : 0,
         changed: raw.changed === true,
         pendingOps: session.opLog.length,
       }
@@ -875,6 +947,10 @@ export function createDocxModel(options) {
       } catch (error) {
         diff = { counts: { added: 0, removed: 0, changed: 0, total: 0 }, changed: false }
       }
+      let backups = []
+      if (documents !== undefined && typeof documents.history === 'function' && session.documentId !== undefined) {
+        try { backups = await documents.history(session.documentId) } catch (error) { backups = [] }
+      }
       return {
         handle: session.handle,
         path: session.path,
@@ -885,6 +961,7 @@ export function createDocxModel(options) {
         stale: session.stale,
         pending: { changes: diff.counts, ops: session.opLog.length },
         commits: session.revisions,
+        backups,
       }
     },
 
@@ -910,6 +987,11 @@ export function createDocxModel(options) {
       }
       if (session.opLog.length === 0 && commitOptions.force !== true) {
         return { handle: session.handle, path: session.path, applied: false, changed: false, revision: session.baseRevision }
+      }
+      if (session.opLog.length > 0 && (session.diffSeenOps ?? 0) < session.opLog.length) {
+        throw new ModelError(MODEL_CODES.REVIEW_REQUIRED, 'run doc_diff before committing pending edits', {
+          details: { pendingOps: session.opLog.length, diffSeenOps: session.diffSeenOps ?? 0 },
+        })
       }
       if (typeof session.documentId !== 'string' || session.documentId === '') {
         throw new ModelError(MODEL_CODES.WRITE_UNAVAILABLE, 'this session was opened from bytes; open it by path to commit')
@@ -971,9 +1053,11 @@ export function createDocxModel(options) {
         sha256: saved.sha256 ?? sha256(saved.bytes),
         engineRevision: saved.revision,
         ops: session.opLog.length,
+        contributors: [...new Set(session.opLog.map((entry) => entry.task).filter((task) => typeof task === 'string' && task !== ''))],
       }
       session.revisions.push(record)
       session.baseRevision = applied.revision
+      session.stale = false
       const lease = leases.get(pathKey(session.path))
       if (lease !== undefined) {
         lease.revision = applied.revision
@@ -1030,6 +1114,7 @@ export function createDocxModel(options) {
       const session = {
         handle: forkHandle,
         ownerSessionId: parent.ownerSessionId ?? '',
+        cwd: parent.cwd ?? '',
         path: parent.path,
         name: parent.name,
         contentHash: sha256(saved.bytes),
@@ -1107,6 +1192,11 @@ export function createDocxModel(options) {
       const replacements = []
       const deletions = []
       const insertions = []
+      const listInsertions = []
+      const tableCreations = []
+      const tableChanges = []
+      /** @param {object} fork - fork session. @param {string} id - block id. @returns {boolean} derived from an op. */
+      const derived = (fork, id) => fork.opLog.some((entry) => (entry.affected ?? []).some((item) => item.id === id))
       for (const id of ids) {
         const base = baseById.get(id)
         const parentBlock = parentById.get(id)
@@ -1116,14 +1206,33 @@ export function createDocxModel(options) {
           const changed = base === undefined
             ? forkBlock !== undefined
             : forkBlock === undefined ? true : blockSignature(forkBlock) !== blockSignature(base)
-          if (changed) candidates.push({ forkIndex: index, label: forks[index].fork.label, block: forkBlock })
+          if (changed) candidates.push({
+            forkIndex: index,
+            label: forks[index].fork.label,
+            block: forkBlock,
+            derived: derived(forks[index], id),
+          })
         }
         if (candidates.length === 0) continue
+        if (!candidates.some((candidate) => candidate.derived)) {
+          conflicts.push({
+            id,
+            reason: 'not-derived',
+            base: base === undefined ? null : clip(base.text, 300),
+            parent: parentBlock === undefined ? null : clip(parentBlock.text, 300),
+            candidates: candidates.map((candidate) => ({
+              task: candidate.label,
+              text: candidate.block === undefined ? null : clip(candidate.block.text, 300),
+            })),
+          })
+          continue
+        }
+        const derivedCandidates = candidates.filter((candidate) => candidate.derived)
         const parentChanged = base === undefined
           ? parentBlock !== undefined
           : parentBlock === undefined ? true : blockSignature(parentBlock) !== blockSignature(base)
         const distinct = new Map()
-        for (const candidate of candidates) {
+        for (const candidate of derivedCandidates) {
           const signature = candidate.block === undefined ? '<deleted>' : blockSignature(candidate.block)
           if (!distinct.has(signature)) distinct.set(signature, candidate)
         }
@@ -1134,10 +1243,11 @@ export function createDocxModel(options) {
             id,
             base: base === undefined ? null : clip(base.text, 300),
             parent: parentBlock === undefined ? null : clip(parentBlock.text, 300),
-            candidates: candidates.map((candidate) => ({
+            candidates: derivedCandidates.map((candidate) => ({
               task: candidate.label,
               text: candidate.block === undefined ? null : clip(candidate.block.text, 300),
             })),
+            reason: 'parent-changed',
           })
           continue
         }
@@ -1150,13 +1260,26 @@ export function createDocxModel(options) {
               task: candidate.label,
               text: candidate.block === undefined ? null : clip(candidate.block.text, 300),
             })),
+            reason: 'fork-diverged',
           })
           continue
         }
         const only = [...distinct.values()][0]
         const block = only.block
         if (block === undefined) {
-          deletions.push({ id, expectedText: parentBlock === undefined ? '' : parentBlock.text })
+          deletions.push({ id, expectedText: parentBlock === undefined ? '' : parentBlock.text, task: only.label })
+          continue
+        }
+        if (base !== undefined && block.kind === 'table' && parentBlock !== undefined && parentBlock.kind === 'table') {
+          const parentRows = Array.isArray(parentBlock.tableRows) ? parentBlock.tableRows : []
+          const forkRows = Array.isArray(block.tableRows) ? block.tableRows : []
+          for (let row = parentRows.length; row < forkRows.length; row++) {
+            tableChanges.push({ op: 'insert_table_row', id, cells: forkRows[row], task: only.label })
+          }
+          for (let row = forkRows.length; row < parentRows.length; row++) {
+            tableChanges.push({ op: 'delete_table_row', id, rowIndex: forkRows.length, task: only.label })
+          }
+          if (JSON.stringify(parentRows) === JSON.stringify(forkRows)) continue
           continue
         }
         if (base === undefined) {
@@ -1171,17 +1294,26 @@ export function createDocxModel(options) {
             const prior = parentById.get(priorId) ?? baseById.get(priorId)
             if (prior !== undefined) { anchor = prior.index; break }
           }
-          insertions.push({ anchor: anchor + 1, order: only.forkIndex, text: block.text ?? '' })
+          if (block.kind === 'table') {
+            tableCreations.push({ anchor: anchor + 1, order: only.forkIndex, block, task: only.label })
+          } else if (block.numbering !== undefined) {
+            listInsertions.push({ anchor: anchor + 1, order: only.forkIndex, block, task: only.label })
+          } else {
+            insertions.push({ anchor: anchor + 1, order: only.forkIndex, text: block.text ?? '', task: only.label })
+          }
           continue
         }
-        replacements.push({ id, expectedText: parentBlock === undefined ? '' : parentBlock.text, text: block.text ?? '' })
+        replacements.push({ id, expectedText: parentBlock === undefined ? '' : parentBlock.text, text: block.text ?? '', task: only.label })
       }
       const applied = []
       const failed = []
+      const deletedIds = new Set()
+      const startOps = parent.opLog.length
       for (const deletion of deletions) {
         try {
-          await model.edit(parent.handle, { type: 'delete_paragraph', blockId: deletion.id, expectedText: deletion.expectedText })
-          applied.push({ op: 'delete_paragraph', id: deletion.id })
+          await model.edit(parent.handle, { type: 'delete_paragraph', blockId: deletion.id, expectedText: deletion.expectedText }, { task: deletion.task })
+          deletedIds.add(deletion.id)
+          applied.push({ op: 'delete_paragraph', id: deletion.id, task: deletion.task })
         } catch (error) {
           failed.push({ id: deletion.id, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
         }
@@ -1193,27 +1325,98 @@ export function createDocxModel(options) {
             blockId: replacement.id,
             expectedText: replacement.expectedText,
             text: replacement.text,
-          })
-          applied.push({ op: 'replace_paragraph', id: replacement.id })
+          }, { task: replacement.task })
+          applied.push({ op: 'replace_paragraph', id: replacement.id, task: replacement.task })
         } catch (error) {
           failed.push({ id: replacement.id, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
         }
+      }
+      for (const change of tableChanges) {
+        try {
+          const op = change.op === 'insert_table_row'
+            ? { type: 'insert_table_row', tableBlockId: change.id, cells: change.cells }
+            : { type: 'delete_table_row', blockId: change.id, rowIndex: change.rowIndex }
+          await model.edit(parent.handle, op, { task: change.task })
+          applied.push({ op: change.op, id: change.id, task: change.task })
+        } catch (error) {
+          failed.push({ id: change.id, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
+        }
+      }
+      const adjustedIndex = (anchor, offset) => {
+        let removed = 0
+        for (const id of deletedIds) {
+          const block = parentById.get(id)
+          if (block !== undefined && block.index < anchor) removed += 1
+        }
+        return anchor - removed + offset
       }
       insertions.sort((left, right) => left.anchor - right.anchor || left.order - right.order)
       const shifted = new Map()
       for (const insertion of insertions) {
         const offset = shifted.get(insertion.anchor) ?? 0
         shifted.set(insertion.anchor, offset + 1)
+        const index = adjustedIndex(insertion.anchor, offset)
+        try {
+          await model.edit(parent.handle, { type: 'insert_paragraph', index, text: insertion.text }, { task: insertion.task })
+          applied.push({ op: 'insert_paragraph', index, task: insertion.task })
+        } catch (error) {
+          failed.push({ index, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
+        }
+      }
+      listInsertions.sort((left, right) => left.anchor - right.anchor || left.order - right.order)
+      for (const insertion of listInsertions) {
+        const index = adjustedIndex(insertion.anchor, 0)
         try {
           await model.edit(parent.handle, {
-            type: 'insert_paragraph',
-            index: insertion.anchor + offset,
-            text: insertion.text,
-          })
-          applied.push({ op: 'insert_paragraph', index: insertion.anchor + offset })
+            type: 'insert_list_item',
+            index,
+            text: insertion.block.text ?? '',
+            numbering: 'decimal',
+            level: insertion.block.numbering && Number.isFinite(insertion.block.numbering.level) ? insertion.block.numbering.level : 0,
+          }, { task: insertion.task })
+          applied.push({ op: 'insert_list_item', index, task: insertion.task })
         } catch (error) {
-          failed.push({ index: insertion.anchor + offset, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
+          failed.push({ index, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
         }
+      }
+      tableCreations.sort((left, right) => left.anchor - right.anchor || left.order - right.order)
+      for (const creation of tableCreations) {
+        const rows = Array.isArray(creation.block.tableRows) ? creation.block.tableRows : []
+        try {
+          const created = await model.edit(parent.handle, {
+            type: 'insert_table_row',
+            cells: rows[0] ?? [],
+            create: true,
+          }, { task: creation.task })
+          const tableId = (created.affected ?? []).find((item) => item.kind === 'table')?.id
+          for (const row of rows.slice(1)) {
+            await model.edit(parent.handle, { type: 'insert_table_row', tableBlockId: tableId, cells: row }, { task: creation.task })
+          }
+          applied.push({ op: 'insert_table_row', id: tableId, task: creation.task })
+        } catch (error) {
+          failed.push({ id: creation.block.id, code: error && error.code ? error.code : 'DOC_MERGE_FAILED' })
+        }
+      }
+      if (failed.length > 0 && applied.length > 0) {
+        while (parent.opLog.length > startOps) {
+          try {
+            await model.undo(parent.handle)
+          } catch (error) {
+            log('warn', 'merge rollback stopped', { handle: parent.handle, error: error instanceof Error ? error.message : String(error) })
+            break
+          }
+        }
+        applied.length = 0
+      }
+      for (const failure of failed) {
+        conflicts.push({
+          id: failure.id,
+          reason: 'apply-failed',
+          base: null,
+          parent: null,
+          candidates: [],
+          code: failure.code,
+        })
       }
       return {
         doc: parent.handle,
@@ -1308,6 +1511,7 @@ export function createDocxModel(options) {
         rows.push({
           handle: session.handle,
           ownerSessionId: session.ownerSessionId ?? '',
+          cwd: session.cwd ?? '',
           path: session.path,
           name: session.name,
           revision: session.revision,
@@ -1378,6 +1582,21 @@ export function createDocxModel(options) {
     },
 
     /** Stop every engine session; idempotent. */
+    /** Close every session owned by one disposed DSH session. @param {string} ownerSessionId - DSH session. */
+    async disposeOwner(ownerSessionId) {
+      let closed = 0
+      for (const session of [...sessions.values()]) {
+        if (session.ownerSessionId !== ownerSessionId) continue
+        await engine.close(session.engineSessionId).catch(() => {})
+        sessions.delete(session.handle)
+        for (const [key, value] of byKey) if (value === session.handle) byKey.delete(key)
+        const lease = leases.get(pathKey(session.path))
+        if (lease !== undefined && lease.holder === session.handle) leases.delete(pathKey(session.path))
+        closed += 1
+      }
+      return { ownerSessionId, closed }
+    },
+
     dispose() {
       if (disposeOnce !== null) return disposeOnce
       disposeOnce = (async () => {
@@ -1399,3 +1618,6 @@ export function createDocxModel(options) {
 
   return model
 }
+
+
+

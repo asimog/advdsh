@@ -1,9 +1,9 @@
-{
+﻿{
   "name": "workspace-editor",
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Workspace editor plugin: Euro-Office document editor in a right-sidebar tab, x2t open/save/PDF export, and an agent document_edit tool.",
+  "description": "Workspace editor plugin: Euro-Office document editor in a right-sidebar tab, x2t open/save/PDF export, and agent doc_* tools.",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",

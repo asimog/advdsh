@@ -202,7 +202,9 @@ async function main() {
 
     // --- save → x2t DOCX -----------------------------------------------------
     const saved = await engine.save(opened.sessionId, { targetPath: OUT_DOCX })
-    facts.save = { path: saved.path, size: saved.size, revision: saved.revision, sha256: saved.sha256 }
+    await writeFile(OUT_DOCX, saved.bytes)
+    facts.save = { path: OUT_DOCX, size: saved.size, revision: saved.revision, sha256: saved.sha256 }
+    check('save_returned_bytes', Buffer.isBuffer(saved.bytes) && saved.bytes.length > 0)
     check('save_wrote_docx', existsSync(OUT_DOCX) && saved.size > 0)
     const verified = verifyDocx(await readFile(OUT_DOCX), AUTHOR)
     facts.docx = verified

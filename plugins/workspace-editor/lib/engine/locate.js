@@ -1,13 +1,15 @@
-/**
+﻿/**
  * Where the engine sidecar and its inputs live. Every path is an environment
  * override first, then a dev-workspace default, so the row loads even when the
  * binaries are missing: `ensureStarted` turns that into ENGINE_UNAVAILABLE with
  * the paths it tried, never a load-time throw.
  */
-import { existsSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ENGINE_CODES, EngineError } from './errors.js'
 
 const engineDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -132,8 +134,16 @@ export function resolveEngineConfig(overrides = {}) {
   if (eoRoot === undefined) missing.push(`Euro-Office frontend with sdkjs/word/apiBuilder.js (tried ${eoValue ?? 'resources/euro-office'})`)
   if (x2t === undefined) missing.push(`x2t converter (tried ${x2tValue ?? 'WORKSPACE_EDITOR_X2T and Stage 5 converter'})`)
 
-  return {
-    electron: electron,
+  const expectedX2tHash = (env.WORKSPACE_EDITOR_X2T_SHA256 ?? '').trim().toLowerCase()
+  if (expectedX2tHash !== '' && x2t !== undefined) {
+    const file = statSync(x2t).isDirectory() ? path.join(x2t, 'x2t.exe') : x2t
+    const actual = createHash('sha256').update(readFileSync(file)).digest('hex')
+    if (actual !== expectedX2tHash) {
+      throw new EngineError(ENGINE_CODES.UNAVAILABLE, `x2t hash mismatch: expected ${expectedX2tHash}, found ${actual}`, { details: { file } })
+    }
+  }
+
+  return {    electron: electron,
     eoRoot: eoRoot,
     x2t: x2t,
     tempRoot: tempRoot,
