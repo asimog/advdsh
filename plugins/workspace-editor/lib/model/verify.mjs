@@ -121,7 +121,7 @@ async function main() {
   if (config.missing.length > 0) throw new Error(`engine is not configured: ${config.missing.join('; ')}`)
 
   const engine = createDocxEngine(config, { runtime: createNodeRuntime() })
-  const store = createDocStore({})
+  const store = createDocStore({ workspaceRoot: OUT_DIR })
   const model = createDocxModel({
     engine,
     documents: documentsFromStore(store),

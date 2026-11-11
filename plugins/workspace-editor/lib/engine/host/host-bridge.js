@@ -239,7 +239,9 @@
       info.id = info.paraId
         ? 'w14:' + info.paraId
         : (internalId !== null && internalId !== undefined ? 'p:' + internalId : 'i:' + index)
-      try { info.text = element.GetText({ Numbering: false, Math: false }) } catch (error) { info.text = '' }
+      info.runs = paragraphRuns(element)
+      info.text = info.runs.length === 0 ? cleanText(rawParagraphText(element)) : paragraphText(element)
+      info.deletedText = deletedText(element)
       try {
         const pr = element.GetParaPr()
         const style = pr && pr.GetStyle()
@@ -266,7 +268,7 @@
             let text = ''
             try {
               const cellParagraph = row.GetCell(c).GetContent().GetElement(0)
-              if (cellParagraph) text = cellParagraph.GetText({ Numbering: false, Math: false })
+              if (cellParagraph) text = paragraphText(cellParagraph)
             } catch (error) {}
             cells.push(text)
           }
@@ -292,13 +294,20 @@
     const doc = getDocument()
     const count = doc.GetElementsCount()
     const blocks = []
+    const tableCounts = new Map()
     for (let i = 0; i < count; i++) {
       const element = doc.GetElement(i)
       if (!element) {
         blocks.push({ index: i, kind: 'unknown', id: 'i:' + i, text: '' })
         continue
       }
-      blocks.push(elementInfo(element, i))
+      const info = elementInfo(element, i)
+      if (info.kind === 'table' && typeof info.id === 'string') {
+        const seen = (tableCounts.get(info.id) ?? 0) + 1
+        tableCounts.set(info.id, seen)
+        if (seen > 1) info.id = `${info.id}#${seen}`
+      }
+      blocks.push(info)
     }
     return {
       blocks,
@@ -314,12 +323,11 @@
 
   function findTarget(doc, op) {
     if (op.blockId !== undefined && op.blockId !== null && op.blockId !== '') {
-      for (let i = 0; i < doc.GetElementsCount(); i++) {
-        const element = doc.GetElement(i)
-        if (!element) continue
-        if (elementInfo(element, i).id === op.blockId) return { element, index: i }
-      }
-      return null
+      const matches = describeDocument().blocks.filter((block) => block.id === op.blockId)
+      if (matches.length > 1) return { ambiguous: true, id: op.blockId, count: matches.length }
+      if (matches.length === 0) return null
+      const index = matches[0].index
+      return { element: doc.GetElement(index), index }
     }
     if (typeof op.index === 'number' && op.index >= 0 && op.index < doc.GetElementsCount()) {
       return { element: doc.GetElement(op.index), index: op.index }
@@ -327,8 +335,115 @@
     return null
   }
 
-  function paragraphText(element) {
+  function rawParagraphText(element) {
     try { return element.GetText({ Numbering: false, Math: false }) } catch (error) { return '' }
+  }
+
+  /** @param {string} value - raw text. @returns {string} text without the paragraph end mark. */
+  function cleanText(value) {
+    return typeof value === 'string' ? value.replace(/\r\n?/g, '').replace(/\n$/, '') : ''
+  }
+
+  /** @param {object} run - ApiRun. @returns {{ inserted: boolean, deleted: boolean, author: string | null }} review facts. */
+  function reviewOf(run) {
+    try {
+      const type = run.Run && typeof run.Run.GetReviewType === 'function' ? run.Run.GetReviewType() : 0
+      const info = run.Run && run.Run.ReviewInfo !== undefined ? run.Run.ReviewInfo : run.ReviewInfo
+      return {
+        inserted: type === 2,
+        deleted: type === 1,
+        author: info && typeof info.GetUserName === 'function' ? String(info.GetUserName() ?? '') || null : null,
+      }
+    } catch (error) {
+      return { inserted: false, deleted: false, author: null }
+    }
+  }
+
+  /** @param {object} run - ApiRun. @returns {object} run properties. */
+  function runProps(run) {
+    const props = {}
+    try {
+      const pr = typeof run.GetTextPr === 'function' ? run.GetTextPr() : null
+      if (!pr) return props
+      const read = (name) => {
+        try {
+          const value = typeof pr[name] === 'function' ? pr[name]() : undefined
+          if (value !== undefined && value !== null) return value
+        } catch (error) {}
+        return undefined
+      }
+      const bold = read('GetBold')
+      const italic = read('GetItalic')
+      const underline = read('GetUnderline')
+      const size = read('GetFontSize')
+      const font = read('GetFontFamily')
+      const color = read('GetColor')
+      const highlight = read('GetHighlight')
+      props.bold = bold === true
+      props.italic = italic === true
+      props.underline = underline === true || (underline !== undefined && underline !== 'none')
+      if (size !== undefined) props.size = size
+      if (font !== undefined) props.font = font
+      if (color !== undefined) props.color = color
+      if (highlight !== undefined) props.highlight = highlight
+    } catch (error) {}
+    return props
+  }
+
+  /** @param {object} run - ApiRun. @returns {boolean} whether the run holds a drawing. */
+  function hasDrawing(run) {
+    try {
+      if (!run.Run || typeof run.Run.GetAllDrawingObjects !== 'function') return false
+      const drawings = []
+      run.Run.GetAllDrawingObjects(drawings)
+      return drawings.length > 0
+    } catch (error) {
+      return false
+    }
+  }
+
+  /** @param {object} element - ApiParagraph. @returns {object[]} run nodes. */
+  function paragraphRuns(element) {
+    const runs = []
+    let count = 0
+    try { count = typeof element.GetElementsCount === 'function' ? element.GetElementsCount() : 0 } catch (error) { count = 0 }
+    for (let index = 0; index < count; index++) {
+      let item = null
+      try { item = element.GetElement(index) } catch (error) { item = null }
+      if (!item) continue
+      let kind = ''
+      try { kind = item.GetClassType() } catch (error) {}
+      if (kind === 'run') {
+        if (hasDrawing(item)) {
+          runs.push({ kind: 'opaque', runIndex: runs.length, type: 'drawing' })
+          continue
+        }
+        let text = ''
+        try { text = cleanText(item.GetText({ NewLineSeparator: '', TabSymbol: '\t' })) } catch (error) { text = '' }
+        runs.push({
+          kind: 'run',
+          runIndex: runs.length,
+          text,
+          props: runProps(item),
+          ...reviewOf(item),
+        })
+      } else if (kind === 'hyperlink' || kind === 'drawing') {
+        runs.push({ kind: 'opaque', runIndex: runs.length, type: kind })
+      }
+    }
+    return runs
+  }
+
+  /** @param {object} element - ApiParagraph. @returns {string} live text. */
+  function paragraphText(element) {
+    const runs = paragraphRuns(element)
+    if (runs.length === 0) return cleanText(rawParagraphText(element))
+    return runs.filter((run) => run.kind !== 'opaque' && run.deleted !== true).map((run) => run.text).join('')
+  }
+
+  /** @param {object} element - ApiParagraph. @returns {string} deleted text. */
+  function deletedText(element) {
+    return paragraphRuns(element).filter((run) => run.deleted === true).map((run) => run.text).join('')
   }
 
   /**
@@ -337,10 +452,11 @@
    * a run (a tracked w:ins) so formatting and revision history survive.
    */
   function replaceParagraphText(paragraph, text) {
+    const raw = rawParagraphText(paragraph)
     const before = paragraphText(paragraph)
-    if (before.length > 0) {
+    if (raw.length > 0) {
       let range = null
-      try { range = paragraph.GetRange(0, before.length) } catch (error) {}
+      try { range = paragraph.GetRange(0, raw.length) } catch (error) {}
       if (!range) {
         try {
           paragraph.Select()
@@ -364,6 +480,7 @@
     const type = op.type
     if (type === 'replace_paragraph') {
       const target = findTarget(doc, op)
+      if (target && target.ambiguous) return opError('AMBIGUOUS_TARGET', `replace_paragraph: ${target.count} blocks have id ${target.id}`)
       if (!target) return opError('TARGET_NOT_FOUND', 'replace_paragraph: target block not found')
       if (target.element.GetClassType() !== 'paragraph') return opError('WRONG_KIND', 'replace_paragraph: target is not a paragraph')
       if (op.expectedText !== undefined && paragraphText(target.element) !== op.expectedText) {
@@ -387,6 +504,7 @@
     }
     if (type === 'delete_paragraph') {
       const target = findTarget(doc, op)
+      if (target && target.ambiguous) return opError('AMBIGUOUS_TARGET', `delete_paragraph: ${target.count} blocks have id ${target.id}`)
       if (!target) return opError('TARGET_NOT_FOUND', 'delete_paragraph: target block not found')
       if (target.element.GetClassType() !== 'paragraph') return opError('WRONG_KIND', 'delete_paragraph: target is not a paragraph')
       if (op.expectedText !== undefined && paragraphText(target.element) !== op.expectedText) {
@@ -461,6 +579,7 @@
     }
     if (type === 'delete_table_row') {
       const target = findTarget(doc, op)
+      if (target && target.ambiguous) return opError('AMBIGUOUS_TARGET', `delete_table_row: ${target.count} blocks have id ${target.id}`)
       if (!target) return opError('TARGET_NOT_FOUND', 'delete_table_row: target block not found')
       if (target.element.GetClassType() !== 'table') return opError('WRONG_KIND', 'delete_table_row: target is not a table')
       const rowIndex = typeof op.rowIndex === 'number' ? op.rowIndex : target.element.GetRowsCount() - 1

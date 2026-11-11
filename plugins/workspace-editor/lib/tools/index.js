@@ -11,11 +11,19 @@
  * model also enforces the gate, so a gated write fails with `DOC_WRITE_DISABLED`
  * instead of disappearing from one surface only.
  */
+import { ERROR_CODES, WorkspaceError, formatToolError } from '../errors.js'
+
 export const name = 'workspace-docx-tools'
 export const inject = ['tools', 'docxModel', 'editorDocuments', 'systemPrompt']
 
 /** Runtime-context order used by the design for `document-model:open`. */
 const CONTEXT_ORDER = 130
+
+/** Review commands that change tracked text and therefore need the write gate. */
+const WRITE_REVIEW_COMMANDS = new Set([
+  'accept_all', 'reject_all', 'accept_selection', 'reject_selection',
+  'acceptAll', 'rejectAll', 'acceptSelection', 'rejectSelection',
+])
 
 /**
  * Register every tool, the runtime context and the lifecycle hooks.
@@ -27,10 +35,20 @@ export function apply(ctx) {
   const writeEnabled = process.env.WORKSPACE_DOCX_WRITE !== 'off'
 
   /**
-   * Register one tool as an effect.
+   * Register one tool as an effect. The wrapper gives every rejection the
+   * specification form `Error: <CODE>: <message>` while preserving `code`.
    * @param {object} definition - raw ToolDefinition.
    */
-  const tool = (definition) => ctx.effect(() => ctx.tools.register(definition), `workspace-docx-tools.${definition.name}`)
+  const tool = (definition) => ctx.effect(() => ctx.tools.register({
+    ...definition,
+    execute: async (args, exec) => {
+      try {
+        return await definition.execute(args, exec)
+      } catch (error) {
+        throw formatToolError(error)
+      }
+    },
+  }), `workspace-docx-tools.${definition.name}`)
 
   /** The tracked-change author for this agent session. @param {object} exec - tool execution facts. */
   const authorOf = (exec) => {
@@ -632,9 +650,60 @@ export function apply(ctx) {
         }
       },
     })
-  }
 
-  // --- doc_state -------------------------------------------------------------
+    // --- doc_undo -------------------------------------------------------------
+    tool({
+      name: 'doc_undo',
+      description: 'Revert the last reversible edit in the working document. The inverse op is untracked; '
+        + 'tracked revisions already serialized in the working copy are not removed.',
+      parameters: {
+        type: 'object',
+        properties: { doc: { type: 'string', description: 'Session handle from doc_open.' } },
+        required: ['doc'],
+        additionalProperties: false,
+      },
+      output: {
+        schema: {
+          type: 'object',
+          properties: {
+            doc: { type: 'string' },
+            undone: { type: 'string' },
+            pendingOps: { type: 'number' },
+            affected: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  index: { type: 'number' },
+                  kind: { type: 'string' },
+                  textBefore: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  textAfter: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                },
+                required: ['id', 'index', 'kind'],
+                additionalProperties: true,
+              },
+            },
+          },
+          required: ['doc', 'undone', 'pendingOps', 'affected'],
+          additionalProperties: false,
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: `undid ${value.undone}; ${value.pendingOps} pending op(s) remain`,
+        }],
+      },
+      async execute(args) {
+        const undone = await model.undo(args.doc)
+        return {
+          doc: args.doc,
+          undone: undone.undone,
+          pendingOps: undone.remaining,
+          affected: undone.affected,
+        }
+      },
+    })
+  }
   tool({
     name: 'doc_state',
     description: 'Inspect or manage open document sessions. Actions: status (sessions and lease facts), '
@@ -778,6 +847,7 @@ export function apply(ctx) {
         return { action: 'export_pdf', pdf: pdf.path }
       }
       if (args.action === 'save') {
+        if (!writeEnabled) throw new WorkspaceError(ERROR_CODES.WRITE_DISABLED, 'document writes are disabled (WORKSPACE_DOCX_WRITE=off)')
         const document = documents.list().find((entry) => entry.id === args.doc || entry.path === args.path)
         return { action: 'save', command: 'save', delivered: documents.command({ id: document ? document.id : undefined, path: args.path, command: 'save' }).delivered }
       }
@@ -787,6 +857,9 @@ export function apply(ctx) {
       if (args.action === 'review') {
         if (typeof args.command !== 'string' || args.command === '') {
           throw new Error('review needs a command (accept_all, reject_all, next_change, previous_change, markup, display_mode)')
+        }
+        if (!writeEnabled && WRITE_REVIEW_COMMANDS.has(args.command)) {
+          throw new WorkspaceError(ERROR_CODES.WRITE_DISABLED, 'document writes are disabled (WORKSPACE_DOCX_WRITE=off)')
         }
         return { action: 'review', command: args.command, delivered: documents.command({ id: args.doc, path: args.path, command: args.command, args: args.args }).delivered }
       }

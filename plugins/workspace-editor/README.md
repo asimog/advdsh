@@ -1,4 +1,4 @@
-# workspace-editor
+﻿# workspace-editor
 
 Version 0.3.0. The bundle provides the document model, agent tools, fan-out and
 legal review beside the Euro-Office editor; see the row sections below.
@@ -31,7 +31,7 @@ version-matched performance run: set `WORKSPACE_EDITOR_FRONTEND` to it.
 No Euro-Office DesktopEditors UI or Tauri shell is used; only its converter and
 its compiled editor resources for PDF export.
 
-## Host half (`lib/index.js`, `lib/x2t.js`, `lib/docs.js`, `lib/docs-edit.js`)
+## Host half (`lib/index.js`, `lib/x2t.js`, `lib/docs.js`)
 
 Serves one origin under `ctx.webServer`:
 
@@ -40,13 +40,13 @@ Serves one origin under `ctx.webServer`:
 | `GET /workspace-editor/host.html?doc=<id>` | Host page: shim, `api.js`, boot. |
 | `GET /workspace-editor/shim.js`, `/boot.js` | `window.AscDesktopEditor` and the document loader. |
 | `GET /workspace-editor/app/*` | `web-apps`, `sdkjs`, `fonts` from the Euro-Office release build (precompiled CSS), served `immutable`. `sdkjs/common/AllFonts.js` is answered with the generated font cache, which is what makes real documents render. |
-| `POST /workspace-editor/api/open` | `{ path }` → `{ id, name, kind }`; DOCX is converted to `Editor.bin` in a per-document temp folder. |
+| `POST /workspace-editor/api/open` | `{ path }` â†’ `{ id, name, kind }`; DOCX is converted to `Editor.bin` in a per-document temp folder. |
 | `GET /workspace-editor/api/info` | Name, kind, path, file mtime, modified flag. |
 | `GET /workspace-editor/api/bin` | The bytes the editor opens. |
-| `POST /workspace-editor/api/save` | Editor bytes → x2t → the document's own path, renamed atomically. |
+| `POST /workspace-editor/api/save` | Editor bytes â†’ x2t â†’ the document's own path, renamed atomically. |
 | `POST /workspace-editor/api/save-as?path=` | Same, to another path. |
 | `POST /workspace-editor/api/close` | Tab closed: drop the doc session and delete its temp folder. |
-| `GET /workspace-editor/api/pdf` | DOCX → PDF through x2t with the font cache. |
+| `GET /workspace-editor/api/pdf` | DOCX â†’ PDF through x2t with the font cache. |
 | `GET /workspace-editor/api/font?path=` | Font bytes for the generated font list only. |
 | `GET /workspace-editor/api/media/<doc>/<name>` | Per-document media folder for inserted images. |
 
@@ -59,10 +59,9 @@ x2t runs as a child process, one conversion at a time, with a cleared temp
 folder per run (stale state can return the previous document). Non-zero exits
 carry stderr into the log and the caller's error.
 
-The host half also registers **`document_edit`**: read a `.docx`, replace text,
-append a paragraph, or replace a paragraph by index. The open editor tab polls
-the file mtime and reloads when the agent changed it and the editor holds no
-unsaved work.
+The host half owns the document write authority: every agent and editor write
+goes through `ctx.editorDocuments`, the lease and the store. The retired
+whole-file `document_edit` writer is not registered.
 
 ## Engine half (`lib/engine/`, row `workspace-docx-engine`)
 
@@ -181,7 +180,7 @@ over described blocks, so `doc_check` and `doc_analyze` share one finding set.
 | `UNDEFINED_ABBREVIATION` | An abbreviation whose first use is not introduced in parentheses; all-caps headings are skipped and citation markers are excluded. |
 | `CROSS_REFERENCE_MISSING` | An `Exhibit`/`Annexure`/`Schedule` reference with no target heading or leading block. |
 | `CITATION_SHAPE` | A reporter citation that does not match the configured pattern (Indian Supreme Court `SCC`/`AIR` by default). |
-| `PLACEHOLDER_TEXT` | `TBD`, `TODO`, `[insert …]`, `<<…>>` and similar text left in the document. |
+| `PLACEHOLDER_TEXT` | `TBD`, `TODO`, `[insert â€¦]`, `<<â€¦>>` and similar text left in the document. |
 | `EMPTY_PARAGRAPH_RUN` | Three or more consecutive empty paragraphs. |
 | `TABLE_HEADER_MISSING` | A table whose first row has no text. |
 
@@ -267,7 +266,7 @@ legal review, under one bundle patch, one ngines.dsh range and one gate.
 - The vendored Lite frontend compiles LESS at runtime, so the first open is
   slower than the release build. Set `WORKSPACE_EDITOR_FRONTEND` to the
   release editors path for a version-matched performance run.
-- `document_edit` remains the simple whole-file agent path beside the `doc_*` tools.
+- The whole-file `document_edit` tool is retired; writes go through `doc_edit`, `doc_commit` and `ctx.editorDocuments`.
 - Legal analyzers are structural and textual only: fields, comments, bookmarks and
   tracked-change metadata are not inspected yet.
 - `replace_paragraph` is reliable on a paragraph without revision marks. On a

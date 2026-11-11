@@ -16,22 +16,28 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { ERROR_CODES, toolCodeForEngine } from '../errors.js'
+import { commitEligibility, markDiffSeen, noteDiffInvalidated, operationContract, sessionContract } from './session-contract.js'
 
 /** Stable codes for tool results; the message is for the operator. */
 export const MODEL_CODES = Object.freeze({
-  SESSION_NOT_FOUND: 'DOC_SESSION_NOT_FOUND',
-  CLOSED: 'DOC_CLOSED',
-  TOO_LARGE: 'DOC_TOO_LARGE',
-  INVALID_OP: 'DOC_INVALID_OP',
-  TARGET_NOT_FOUND: 'DOC_TARGET_NOT_FOUND',
-  STALE_TARGET: 'DOC_STALE_TARGET',
-  STALE_BASE: 'DOC_STALE_BASE',
-  EDITOR_DIRTY: 'DOC_EDITOR_DIRTY',
-  WRITE_DISABLED: 'DOC_WRITE_DISABLED',
+  SESSION_NOT_FOUND: ERROR_CODES.SESSION_NOT_FOUND,
+  CLOSED: ERROR_CODES.CLOSED,
+  TOO_LARGE: ERROR_CODES.TOO_LARGE,
+  INVALID_OP: ERROR_CODES.INVALID_OP,
+  TARGET_NOT_FOUND: ERROR_CODES.TARGET_NOT_FOUND,
+  AMBIGUOUS_TARGET: ERROR_CODES.AMBIGUOUS_TARGET,
+  STALE_TARGET: ERROR_CODES.STALE_TARGET,
+  UNSUPPORTED_EDIT: ERROR_CODES.UNSUPPORTED_EDIT,
+  STALE_BASE: ERROR_CODES.STALE_BASE,
+  BASE_REQUIRED: ERROR_CODES.BASE_REQUIRED,
+  EDITOR_DIRTY: ERROR_CODES.EDITOR_DIRTY,
+  OUTSIDE_WORKSPACE: ERROR_CODES.OUTSIDE_WORKSPACE,
+  WRITE_DISABLED: ERROR_CODES.WRITE_DISABLED,
   WRITE_UNAVAILABLE: 'DOC_WRITE_UNAVAILABLE',
-  COMMIT_FAILED: 'DOC_COMMIT_FAILED',
-  FORKED_COMMIT: 'DOC_FORKED_COMMIT',
-  UNDO_UNAVAILABLE: 'DOC_UNDO_UNAVAILABLE',
+  COMMIT_FAILED: ERROR_CODES.COMMIT_FAILED,
+  FORKED_COMMIT: ERROR_CODES.FORKED_COMMIT,
+  UNDO_UNAVAILABLE: ERROR_CODES.UNDO_UNAVAILABLE,
   OPEN_FAILED: 'DOC_OPEN_FAILED',
 })
 
@@ -359,16 +365,20 @@ export function createDocxModel(options) {
   function mapEngineError(error, fallback) {
     if (error instanceof ModelError) return error
     const code = error && typeof error.code === 'string' ? error.code : undefined
-    if (code === 'ENGINE_STALE_TARGET') {
-      return new ModelError(MODEL_CODES.STALE_TARGET, 'the target block changed since it was read; describe the document again', {
+    const mapped = code === undefined ? fallback : toolCodeForEngine(code)
+    if (mapped === MODEL_CODES.STALE_TARGET) {
+      return new ModelError(mapped, 'the target block changed since it was read; describe the document again', {
         cause: error,
         details: { engineCode: code },
       })
     }
-    if (code === 'ENGINE_SESSION_NOT_FOUND' || code === 'ENGINE_SESSION_LOST') {
-      return new ModelError(MODEL_CODES.CLOSED, 'the engine session is gone; reload the document', { cause: error, details: { engineCode: code } })
+    if (mapped === MODEL_CODES.CLOSED) {
+      return new ModelError(mapped, 'the engine session is gone; reload the document', { cause: error, details: { engineCode: code } })
     }
-    return new ModelError(fallback, error instanceof Error ? error.message : String(error), { cause: error })
+    return new ModelError(mapped, error instanceof Error ? error.message : String(error), {
+      cause: error,
+      details: code === undefined ? undefined : { engineCode: code },
+    })
   }
 
   /** Fill expectedText from the current description when the caller targeted a block id. */
@@ -428,6 +438,8 @@ export function createDocxModel(options) {
     session.engineSessionId = reopened.sessionId
     session.revision = 0
     session.opLog = []
+    session.diffSeenOps = 0
+    session.diffSeenAt = null
     invalidate(session)
     const description = await describeSession(session)
     session.baseBlocks = description.blocks
@@ -478,7 +490,10 @@ export function createDocxModel(options) {
         bytes = await readFileImpl(docView?.path ?? absolute)
       }
       const contentHash = sha256(bytes)
-      const key = `${pathKey(absolute ?? name ?? 'document')}\n${contentHash}`
+      const ownerSessionId = typeof openOptions.sessionId === 'string' && openOptions.sessionId !== ''
+        ? openOptions.sessionId
+        : (typeof openOptions.ownerSessionId === 'string' ? openOptions.ownerSessionId : '')
+      const key = `${ownerSessionId}\n${pathKey(absolute ?? name ?? 'document')}\n${contentHash}`
       const existingHandle = byKey.get(key)
       if (existingHandle !== undefined) {
         const existing = sessions.get(existingHandle)
@@ -495,6 +510,7 @@ export function createDocxModel(options) {
       }
       const session = {
         handle,
+        ownerSessionId,
         path: absolute ?? fileName,
         name: fileName,
         contentHash,
@@ -517,6 +533,9 @@ export function createDocxModel(options) {
         cached: undefined,
         forkChildren: new Set(),
         fork: undefined,
+        taskLabel: null,
+        diffSeenOps: 0,
+        diffSeenAt: null,
       }
       byKey.set(key, handle)
       sessions.set(handle, session)
@@ -731,6 +750,7 @@ export function createDocxModel(options) {
         inverse: inverseOf(normalized.type, engineOp, result, description),
       }
       session.opLog.push(entry)
+      noteDiffInvalidated(session)
       invalidate(session)
       return {
         handle: session.handle,
@@ -765,6 +785,7 @@ export function createDocxModel(options) {
         throw mapEngineError(error, MODEL_CODES.UNDO_UNAVAILABLE)
       }
       session.opLog = session.opLog.filter((candidate) => candidate !== entry)
+      noteDiffInvalidated(session)
       session.revision = Number.isFinite(result.revision) ? result.revision : session.revision + 1
       invalidate(session)
       return {
@@ -793,6 +814,7 @@ export function createDocxModel(options) {
         before: change.before === undefined ? null : clip(change.before.text ?? ''),
         after: change.after === undefined ? null : clip(change.after.text ?? ''),
       }))
+      markDiffSeen(session)
       return {
         handle: session.handle,
         path: session.path,
@@ -1007,6 +1029,7 @@ export function createDocxModel(options) {
       const baseBlocks = description.blocks.map((block) => ({ ...block }))
       const session = {
         handle: forkHandle,
+        ownerSessionId: parent.ownerSessionId ?? '',
         path: parent.path,
         name: parent.name,
         contentHash: sha256(saved.bytes),
@@ -1029,6 +1052,9 @@ export function createDocxModel(options) {
         cached: undefined,
         forkChildren: new Set(),
         fork: { parent: parent.handle, label, baseBlocks },
+        taskLabel: label,
+        diffSeenOps: 0,
+        diffSeenAt: null,
       }
       sessions.set(forkHandle, session)
       parent.forkChildren.add(forkHandle)
@@ -1253,10 +1279,27 @@ export function createDocxModel(options) {
       throw new ModelError(MODEL_CODES.SESSION_NOT_FOUND, `no open session for content hash ${contentHash}; open the path again`)
     },
 
-    /** @param {string} [cwd] - restrict to documents under this directory. @returns {object[]} session facts. */
-    status(cwd) {
+    /** @param {string} handle - session handle. @returns {object} the public session contract. */
+    contract(handle) {
+      const session = requireSession(handle)
+      return sessionContract(session, leases.get(pathKey(session.path)))
+    },
+
+    /** @param {string} handle - session handle. @param {{ force?: boolean }} [options] - commit options. */
+    commitEligibility(handle, options = {}) {
+      return commitEligibility(requireSession(handle), options)
+    },
+
+    /** @param {string} handle - session handle. @returns {object[]} public op-log entries. */
+    pendingOperations(handle) {
+      return requireSession(handle).opLog.map(operationContract)
+    },
+
+    /** @param {string} [cwd] - restrict to documents under this directory. @param {string} [ownerSessionId] - restrict to one DSH session. @returns {object[]} session facts. */
+    status(cwd, ownerSessionId) {
       const rows = []
       for (const session of sessions.values()) {
+        if (typeof ownerSessionId === 'string' && ownerSessionId !== '' && session.ownerSessionId !== ownerSessionId) continue
         if (typeof cwd === 'string' && cwd !== '') {
           const resolved = path.resolve(cwd)
           if (session.path !== resolved && !session.path.startsWith(`${resolved}${path.sep}`)) continue
@@ -1264,6 +1307,7 @@ export function createDocxModel(options) {
         const lease = leases.get(pathKey(session.path))
         rows.push({
           handle: session.handle,
+          ownerSessionId: session.ownerSessionId ?? '',
           path: session.path,
           name: session.name,
           revision: session.revision,
@@ -1272,6 +1316,8 @@ export function createDocxModel(options) {
           readMode: session.readMode,
           stale: session.stale,
           pendingOps: session.opLog.length,
+          taskLabel: session.taskLabel ?? null,
+          diffSeenOps: session.diffSeenOps ?? 0,
           editorDirty: lease?.editorDirty === true,
           conflict: lease?.conflict ?? null,
         })
@@ -1279,10 +1325,11 @@ export function createDocxModel(options) {
       return rows
     },
 
-    /** @param {string} [cwd] - restrict to documents under this directory. @returns {string[]} runtime-context lines. */
-    statusLines(cwd) {
+    /** @param {string} [cwd] - restrict to documents under this directory. @param {string} [ownerSessionId] - restrict to one DSH session. @returns {string[]} runtime-context lines. */
+    statusLines(cwd, ownerSessionId) {
       const lines = []
       for (const session of sessions.values()) {
+        if (typeof ownerSessionId === 'string' && ownerSessionId !== '' && session.ownerSessionId !== ownerSessionId) continue
         if (typeof cwd === 'string' && cwd !== '') {
           const resolved = path.resolve(cwd)
           if (session.path !== resolved && !session.path.startsWith(`${resolved}${path.sep}`)) continue

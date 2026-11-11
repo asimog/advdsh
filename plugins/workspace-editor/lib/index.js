@@ -7,14 +7,15 @@
  * tab, the host page and agent tools. Every route is fenced by the
  * composition's `connection` service when it exists. `GET /workspace-editor/events`
  * is the SSE channel a tab or host page subscribes to for document, editor and
- * command frames. The agent's `document_edit` tool edits the same file.
+ * command frames. All document writes go through `ctx.editorDocuments`; the
+ * retired whole-file `document_edit` writer is not registered.
  */
 import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDocStore, DocError } from './docs.js'
 import { repoRoot, X2tError } from './x2t.js'
-import { editDocument, readDocumentText } from './docs-edit.js'
+import { ERROR_CODES, routeErrorBody, statusFor } from './errors.js'
 
 export const name = 'workspace-editor'
 export const inject = ['webServer', 'tools']
@@ -445,7 +446,10 @@ export function apply(ctx) {
       const target = url.searchParams.get('path')
       if (target === null || target === '') throw new DocError('path is required', { status: 400 })
       const bytes = await readBody(req)
-      const saved = await docs.saveAs(id, bytes, target, { base: baseOf(url, req) })
+      const saved = await docs.saveAs(id, bytes, target, {
+        base: baseOf(url, req),
+        overwrite: url.searchParams.get('overwrite') === 'true',
+      })
       log(`saved as ${saved.path} revision ${saved.revision.slice(0, 12)}`)
       sendJson(res, 200, saved)
     } catch (error) {
@@ -558,83 +562,22 @@ export function apply(ctx) {
     }
   })
 
-  // --- agent-facing tool ------------------------------------------------------
-  ctx.effect(() => ctx.tools.register({
-    name: 'document_edit',
-    description: 'Read or change a Word document (.docx) in the workspace. '
-      + 'With no edit fields it returns the document text. '
-      + '`find`/`replace` change text, `append` adds a paragraph at the end, and `set_paragraph` replaces one paragraph by index. '
-      + 'The editor tab of an open document reloads the file when it has no unsaved changes.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Absolute path to a .docx file.' },
-        find: { type: 'string', description: 'Text to find (case-sensitive, inside one text run).' },
-        replace: { type: 'string', description: 'Replacement text for `find`.' },
-        append: { type: 'string', description: 'Paragraph text appended at the end of the document.' },
-        set_paragraph: {
-          type: 'object',
-          description: 'Replace the text of one paragraph by zero-based body index.',
-          properties: {
-            index: { type: 'number' },
-            text: { type: 'string' },
-          },
-          required: ['index', 'text'],
-          additionalProperties: false,
-        },
-      },
-      required: ['path'],
-      additionalProperties: false,
-    },
-    output: {
-      schema: {
-        type: 'object',
-        properties: {
-          path: { type: 'string' },
-          changed: { type: 'boolean' },
-          paragraphs: { type: 'number' },
-          text: { type: 'string' },
-        },
-        required: ['path', 'changed', 'paragraphs', 'text'],
-        additionalProperties: false,
-      },
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.changed
-          ? `changed ${value.path} (${value.paragraphs} paragraphs)`
-          : value.text,
-      }],
-    },
-    async execute(args) {
-      const request = /** @type {{ path: string, find?: string, replace?: string, append?: string, set_paragraph?: { index: number, text: string } }} */ (args)
-      if (typeof request.path !== 'string' || request.path === '') throw new DocError('path is required', { status: 400 })
-      const hasEdit = request.find !== undefined || request.append !== undefined || request.set_paragraph !== undefined
-      if (!hasEdit) {
-        const text = await readDocumentText(request.path)
-        return { path: path.resolve(request.path), changed: false, paragraphs: 0, text }
-      }
-      const result = await editDocument(request.path, {
-        find: request.find,
-        replace: request.replace,
-        append: request.append,
-        setParagraph: request.set_paragraph,
-      })
-      return { path: result.path, changed: true, paragraphs: result.paragraphs, text: '' }
-    },
-  }), 'workspace-editor.tool')
+  // The document write authority is `ctx.editorDocuments`; the old
+  // `document_edit` whole-file writer is intentionally not registered.
 
-  /** Map a store or converter failure to a named HTTP error. */
+  /** Map a store or converter failure to the route error body. */
   function fail(res, error) {
+    const body = routeErrorBody(error)
     if (error instanceof DocError) {
-      sendJson(res, error.status, { error: error.message, code: error.code })
+      sendJson(res, error.status ?? statusFor(body.code), body)
       return
     }
     if (error instanceof X2tError) {
       log(`x2t: ${error.message}\n${error.stderr}`)
-      sendJson(res, 500, { error: error.message, stderr: error.stderr.slice(0, 4000) })
+      sendJson(res, 500, { ...body, code: ERROR_CODES.COMMIT_FAILED, stderr: error.stderr.slice(0, 4000) })
       return
     }
     log(`route failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
-    sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+    sendJson(res, 500, body)
   }
 }

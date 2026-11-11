@@ -12,12 +12,14 @@
  * images, and `x2t/` for the converter scratch.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { ERROR_CODES } from './errors.js'
 import { convert, FORMAT_BIN, FORMAT_DOCX, FORMAT_PDF, X2tError } from './x2t.js'
 
 const EXTENSIONS = { '.docx': 'word', '.doc': 'word', '.pdf': 'pdf' }
+const DEFAULT_BACKUP_RETENTION = 20
 
 /** Default `wait` deadline; a caller can shorten or extend it per call. */
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000
@@ -46,6 +48,22 @@ function sha256(bytes) {
 /** @param {string} revision - a content revision. @returns {string} the short form used in messages. */
 function shortRevision(revision) {
   return typeof revision === 'string' ? revision.slice(0, 12) : String(revision)
+}
+
+/** @param {string} file - absolute path. @returns {string} the document ID from the spec. */
+function documentId(file) {
+  return createHash('sha1').update(path.resolve(file)).digest('hex').slice(0, 12)
+}
+
+/** @param {string} value - candidate. @returns {string} required non-empty string. */
+function requiredBase(value) {
+  if (typeof value === 'string' && value !== '') return value
+  throw new DocError('a base revision is required', { status: 400, code: ERROR_CODES.BASE_REQUIRED })
+}
+
+/** @param {string} message - operator text. @param {string} code - public code. @param {number} status - HTTP status. */
+function storeError(message, code, status) {
+  return new DocError(message, { status, code })
 }
 
 /** A stale write: the file is not the revision the caller read. */
@@ -130,7 +148,7 @@ export function createLocalStore() {
     return { revision, mtimeMs: info.mtimeMs, size: info.size }
   }
 
-  return { stat: statRevision, write }
+  return { stat: statRevision, write, read }
 }
 
 /**
@@ -219,6 +237,10 @@ async function writeAtomically(file, bytes) {
 /** Keep one store per plugin activation. */
 export function createDocStore(options = {}) {
   const store = resolveStore(options.store)
+  const workspaceRoot = path.resolve(typeof options.workspaceRoot === 'string' ? options.workspaceRoot : process.cwd())
+  const backupRetention = Number.isInteger(options.backupRetention) && options.backupRetention >= 0
+    ? options.backupRetention
+    : DEFAULT_BACKUP_RETENTION
   /** Host-side observer: document/editor/saved/conflict facts, broadcast by `lib/index.js`. */
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : () => {}
   /**
@@ -245,6 +267,90 @@ export function createDocStore(options = {}) {
     } catch {
       // A host observer is not allowed to fail a completed store operation.
     }
+  }
+
+  /** @param {string} file - absolute document path. @returns {string} backup directory. */
+  function backupDirectory(file) {
+    return path.join(workspaceRoot, '.workspace-editor', 'backups', documentId(file))
+  }
+
+  /** @param {string} file - document path. @returns {Promise<{ bytes: Buffer, revision: string } | undefined>} current backup source. */
+  async function currentBytes(file) {
+    let current
+    try {
+      current = await store.stat(file)
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') return undefined
+      throw error
+    }
+    const value = typeof store.read === 'function' ? await store.read(file) : await readFile(file)
+    const bytes = Buffer.isBuffer(value) ? value : value.bytes
+    return { bytes, revision: current.revision }
+  }
+
+  /** Remove backups beyond the retention count, newest first. @param {string} directory - backup directory. */
+  async function pruneBackups(directory) {
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') return
+      throw error
+    }
+    const files = []
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      const file = path.join(directory, entry.name)
+      const info = await stat(file)
+      files.push({ file, name: entry.name, mtimeMs: info.mtimeMs })
+    }
+    files.sort((left, right) => right.mtimeMs - left.mtimeMs || right.name.localeCompare(left.name))
+    for (const entry of files.slice(backupRetention)) await unlink(entry.file)
+  }
+
+  /**
+   * Call the adapter's backup or write the local copy of the previous bytes.
+   * @param {string} file - document path.
+   * @param {{ bytes: Buffer, revision: string }} previous - bytes being replaced.
+   */
+  async function backupPrevious(file, previous) {
+    if (typeof store.backup === 'function') {
+      await store.backup(file, previous.bytes, previous.revision)
+      return
+    }
+    const directory = backupDirectory(file)
+    await mkdir(directory, { recursive: true })
+    const name = `${previous.revision}${path.extname(file)}`
+    await writeFile(path.join(directory, name), previous.bytes)
+    await pruneBackups(directory)
+  }
+
+  /** @param {string} file - document path. */
+  async function backupBeforeOverwrite(file) {
+    const previous = await currentBytes(file)
+    if (previous !== undefined) await backupPrevious(file, previous)
+  }
+
+  /** @param {string} file - document path. @returns {Promise<string[]>} earlier revisions, oldest first. */
+  async function historyOf(file) {
+    if (typeof store.history === 'function') return await store.history(file)
+    const directory = backupDirectory(file)
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') return []
+      throw error
+    }
+    const files = []
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      const filePath = path.join(directory, entry.name)
+      const info = await stat(filePath)
+      files.push({ file: filePath, name: entry.name, mtimeMs: info.mtimeMs })
+    }
+    files.sort((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name))
+    return files.map((entry) => path.basename(entry.name, path.extname(entry.name)))
   }
 
   /** @param {any} doc - open document record. */
@@ -383,17 +489,15 @@ export function createDocStore(options = {}) {
    */
   async function applyBytes(file, bytes, writeOptions = {}) {
     const absolute = path.resolve(file)
+    const base = requiredBase(writeOptions.baseRevision)
     const doc = byPath.get(pathKey(absolute))
-    const base = typeof writeOptions.baseRevision === 'string' && writeOptions.baseRevision !== ''
-      ? writeOptions.baseRevision
-      : undefined
     if (doc !== undefined) {
       await refresh(doc)
       if (doc.modified && writeOptions.allowDirty !== true) {
         notify({ type: 'conflict', path: absolute, base, current: doc.revision, code: 'DOC_EDITOR_DIRTY' })
         throw new DocError('the editor has unsaved changes', { status: 409, code: 'DOC_EDITOR_DIRTY' })
       }
-      if (base !== undefined && base !== doc.revision) {
+      if (base !== doc.revision) {
         notify({ type: 'conflict', path: absolute, base, current: doc.revision, code: 'DOC_STALE_BASE' })
         throw staleBase(absolute, base, doc.revision)
       }
@@ -406,8 +510,9 @@ export function createDocStore(options = {}) {
     const preparedBin = doc !== undefined && doc.kind === 'word'
       ? await docxBytesToBin(bytes, doc.tempDir)
       : undefined
+    await backupBeforeOverwrite(absolute)
     try {
-      written = await store.write(absolute, bytes, base === undefined ? {} : { baseRevision: base })
+      written = await store.write(absolute, bytes, { baseRevision: base })
     } catch (error) {
       if (error instanceof DocError && error.code === 'DOC_STALE_BASE') {
         const current = await statOr404(store, absolute).catch(() => undefined)
@@ -448,6 +553,15 @@ export function createDocStore(options = {}) {
   }
 
   /**
+   * Earlier store revisions of one document, oldest first.
+   * @param {string} id - document id.
+   * @returns {Promise<string[]>} revisions.
+   */
+  async function history(id) {
+    return historyOf(get(id).path)
+  }
+
+  /**
    * Persist editor bytes to the document's own path. The bytes are Editor.bin
    * for Word documents and PDF bytes otherwise.
    * @param {string} id - document id.
@@ -458,15 +572,16 @@ export function createDocStore(options = {}) {
   async function save(id, content, saveOptions = {}) {
     const doc = get(id)
     await refresh(doc)
-    const base = typeof saveOptions.base === 'string' && saveOptions.base !== '' ? saveOptions.base : undefined
-    if (base !== undefined && base !== doc.revision) {
+    const base = requiredBase(saveOptions.base)
+    if (base !== doc.revision) {
       notify({ type: 'conflict', path: doc.path, base, current: doc.revision, code: 'DOC_STALE_BASE' })
       throw staleBase(doc.path, base, doc.revision)
     }
     const documentBytes = doc.kind === 'word' ? await binToDocxBytes(content, doc.tempDir) : content
     let written
     try {
-      written = await store.write(doc.path, documentBytes, { baseRevision: doc.revision })
+      await backupBeforeOverwrite(doc.path)
+      written = await store.write(doc.path, documentBytes, { baseRevision: base })
     } catch (error) {
       if (error instanceof DocError && error.code === 'DOC_STALE_BASE') {
         const current = await statOr404(store, doc.path).catch(() => undefined)
@@ -502,13 +617,26 @@ export function createDocStore(options = {}) {
     const doc = get(id)
     await refresh(doc)
     const absolute = path.resolve(target)
+    if (path.extname(absolute).toLowerCase() !== path.extname(doc.path).toLowerCase()) {
+      throw storeError(`save-as target must keep the ${path.extname(doc.path)} type`, ERROR_CODES.INVALID_TARGET, 400)
+    }
+    let existing
+    try {
+      existing = await store.stat(absolute)
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') throw error
+    }
+    if (existing !== undefined && saveOptions.overwrite !== true) {
+      throw storeError('save-as target exists; pass overwrite=true to replace it', ERROR_CODES.TARGET_EXISTS, 409)
+    }
     const base = typeof saveOptions.base === 'string' && saveOptions.base !== '' ? saveOptions.base : undefined
     if (base !== undefined && base !== doc.revision) {
       notify({ type: 'conflict', path: doc.path, base, current: doc.revision, code: 'DOC_STALE_BASE' })
       throw staleBase(doc.path, base, doc.revision)
     }
     const documentBytes = doc.kind === 'word' ? await binToDocxBytes(content, doc.tempDir) : content
-    const written = await store.write(absolute, documentBytes, {})
+    if (existing !== undefined) await backupBeforeOverwrite(absolute)
+    const written = await store.write(absolute, documentBytes, existing === undefined ? {} : { baseRevision: existing.revision })
     notify({ type: 'saved', path: absolute, revision: written.revision })
     return { path: absolute, revision: written.revision }
   }
@@ -662,6 +790,7 @@ export function createDocStore(options = {}) {
     applyBytes,
     save,
     saveAs,
+    history,
     setEditorState,
     wait,
     exportPdf,

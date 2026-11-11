@@ -18,6 +18,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { diffBlocks } from './diff.js'
 import { ENGINE_CODES, EngineError } from './errors.js'
+import { engineCodeForSidecar } from '../errors.js'
 
 const PROTOCOL_VERSION = 1
 
@@ -109,6 +110,27 @@ function normalizeBlock(block, index) {
   if (source.numbering && Number.isFinite(source.numbering.level)) normalized.numbering = { level: source.numbering.level }
   if (Number.isFinite(source.rows)) normalized.rows = source.rows
   if (Array.isArray(source.tableRows)) normalized.tableRows = source.tableRows
+  if (typeof source.deletedText === 'string' && source.deletedText !== '') normalized.deletedText = source.deletedText
+  if (Array.isArray(source.runs)) {
+    normalized.runs = source.runs.map((run, runIndex) => {
+      const entry = run && typeof run === 'object' ? run : {}
+      return {
+        kind: entry.kind === 'opaque' ? 'opaque' : 'run',
+        runIndex: Number.isInteger(entry.runIndex) ? entry.runIndex : runIndex,
+        ...(entry.kind === 'opaque'
+          ? { type: typeof entry.type === 'string' ? entry.type : 'unknown' }
+          : {
+            text: typeof entry.text === 'string' ? entry.text : '',
+            props: entry.props && typeof entry.props === 'object' ? entry.props : {},
+            inserted: entry.inserted === true,
+            deleted: entry.deleted === true,
+            author: entry.author ?? null,
+          }),
+      }
+    })
+  }
+  if (source.props && typeof source.props === 'object') normalized.props = source.props
+  if (Array.isArray(source.rowsDetail)) normalized.rowsDetail = source.rowsDetail
   return normalized
 }
 
@@ -384,17 +406,7 @@ export class DocxEngineSidecar {
   #errorFromSidecar(method, raw) {
     const source = raw && typeof raw === 'object' ? raw : {}
     const code = typeof source.code === 'string' ? source.code : 'SIDECAR_ERROR'
-    const mapped = code === 'CANCELLED'
-      ? ENGINE_CODES.CANCELLED
-      : code === 'STALE_TARGET'
-        ? ENGINE_CODES.STALE_TARGET
-        : code === 'TIMEOUT'
-          ? ENGINE_CODES.TIMEOUT
-          : code === 'SAVE_FAILED'
-            ? ENGINE_CODES.SAVE_FAILED
-            : code === 'SESSION_NOT_FOUND'
-              ? ENGINE_CODES.SESSION_NOT_FOUND
-              : ENGINE_CODES.PROTOCOL
+    const mapped = engineCodeForSidecar(code)
     return new EngineError(mapped, `${method}: ${source.message ?? 'sidecar request failed'}`, {
       details: { sidecarCode: code, method },
     })

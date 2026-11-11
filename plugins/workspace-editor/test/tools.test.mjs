@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Unit tests for the `doc_*` tool row over the real model with fake engine and
  * store fixtures: schemas, canonical values, write gating, runtime context and
  * the replayable presenters.
@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import test from 'node:test'
 import { apply as applyTools } from '../lib/tools/index.js'
+import { engineCodeForSidecar, formatToolError, routeErrorBody, toolCodeForEngine } from '../lib/errors.js'
 import { PATH, createFakeDocuments, createModel } from './fixtures.mjs'
 
 /** @param {unknown} value - canonical tool value. @param {object} schema - output.schema. @param {string} at - path for messages. */
@@ -115,7 +116,7 @@ test('registers every read tool, the write tools and the runtime context', () =>
   const { tools, contexts } = boot({ documents: true })
   assert.deepEqual([...tools.keys()].sort(), [
     'doc_check', 'doc_commit', 'doc_diff', 'doc_edit', 'doc_open', 'doc_read',
-    'doc_search', 'doc_state', 'editor',
+    'doc_search', 'doc_state', 'doc_undo', 'editor',
   ])
   assert.equal(contexts.length, 1)
   assert.equal(contexts[0].name, 'document-model:open')
@@ -123,18 +124,49 @@ test('registers every read tool, the write tools and the runtime context', () =>
   assert.equal(contexts[0].text({}), '')
 })
 
-test('the write gate removes doc_edit and doc_commit from the tool set', () => {
+test('the write gate removes doc_edit, doc_commit and doc_undo from the tool set', () => {
   const previous = process.env.WORKSPACE_DOCX_WRITE
   process.env.WORKSPACE_DOCX_WRITE = 'off'
   try {
     const { tools } = boot({ documents: true })
     assert.equal(tools.has('doc_edit'), false)
     assert.equal(tools.has('doc_commit'), false)
+    assert.equal(tools.has('doc_undo'), false)
     assert.equal(tools.has('doc_read'), true)
+    assert.equal(tools.has('document_edit'), false)
   } finally {
     if (previous === undefined) delete process.env.WORKSPACE_DOCX_WRITE
     else process.env.WORKSPACE_DOCX_WRITE = previous
   }
+})
+
+test('the write gate refuses write review commands but permits display commands', async () => {
+  const previous = process.env.WORKSPACE_DOCX_WRITE
+  process.env.WORKSPACE_DOCX_WRITE = 'off'
+  try {
+    const booted = boot({ documents: true })
+    await assert.rejects(
+      () => booted.tools.get('editor').execute({ action: 'review', doc: 'd1', command: 'acceptAll', userInstruction: 'accept' }),
+      (error) => error.code === 'DOC_WRITE_DISABLED',
+    )
+    assert.equal(booted.documents.commands.length, 0)
+    const display = await run(booted.tools.get('editor'), { action: 'review', doc: 'd1', command: 'displayMode', args: { mode: 'final' } })
+    assert.equal(display.command, 'displayMode')
+  } finally {
+    if (previous === undefined) delete process.env.WORKSPACE_DOCX_WRITE
+    else process.env.WORKSPACE_DOCX_WRITE = previous
+  }
+})
+
+test('doc_undo reverts the last pending edit', async () => {
+  const booted = boot({ documents: true })
+  const opened = await run(booted.tools.get('doc_open'), { path: PATH })
+  await run(booted.tools.get('doc_edit'), { doc: opened.handle, type: 'replace_paragraph', blockId: 'p:2', text: 'Changed.' })
+  const undone = await run(booted.tools.get('doc_undo'), { doc: opened.handle })
+  assert.equal(undone.undone, 'replace_paragraph')
+  assert.equal(undone.pendingOps, 0)
+  const status = await run(booted.tools.get('doc_state'), { action: 'status' })
+  assert.equal(status.sessions[0].pendingOps, 0)
 })
 
 test('doc_open, doc_read and doc_search round trip with annotated blocks', async () => {
@@ -194,12 +226,32 @@ test('doc_edit maps a stale target and an unsupported op to stable codes', async
   const opened = await run(booted.tools.get('doc_open'), { path: PATH })
   await assert.rejects(
     () => booted.tools.get('doc_edit').execute({ doc: opened.handle, type: 'replace_paragraph', blockId: 'p:missing', text: 'x' }),
-    (error) => error.code === 'DOC_TARGET_NOT_FOUND',
+    (error) => {
+      assert.equal(error.code, 'DOC_TARGET_NOT_FOUND')
+      assert.match(error.message, /^DOC_TARGET_NOT_FOUND: /)
+      assert.match(`Error: ${error.message}`, /^Error: DOC_TARGET_NOT_FOUND: /)
+      return true
+    },
   )
   await assert.rejects(
     () => booted.tools.get('doc_edit').execute({ doc: opened.handle, type: 'apply_style', blockId: 'p:2' }),
     (error) => error.code === 'DOC_INVALID_OP',
   )
+})
+
+test('the error contract has one sidecar map, one engine map and the wire formats', () => {
+  assert.equal(engineCodeForSidecar('TARGET_NOT_FOUND'), 'ENGINE_TARGET_NOT_FOUND')
+  assert.equal(engineCodeForSidecar('AMBIGUOUS_TARGET'), 'ENGINE_AMBIGUOUS_TARGET')
+  assert.equal(engineCodeForSidecar('WRONG_KIND'), 'ENGINE_INVALID_OP')
+  assert.equal(engineCodeForSidecar('SOMETHING_NEW'), 'ENGINE_PROTOCOL')
+  assert.equal(toolCodeForEngine('ENGINE_TARGET_NOT_FOUND'), 'DOC_TARGET_NOT_FOUND')
+  assert.equal(toolCodeForEngine('ENGINE_UNSUPPORTED'), 'DOC_UNSUPPORTED_EDIT')
+  assert.equal(toolCodeForEngine('ENGINE_SESSION_LOST'), 'DOC_CLOSED')
+
+  const formatted = formatToolError(Object.assign(new Error('block not found'), { code: 'DOC_TARGET_NOT_FOUND' }))
+  assert.equal(formatted.code, 'DOC_TARGET_NOT_FOUND')
+  assert.equal(formatted.message, 'DOC_TARGET_NOT_FOUND: block not found')
+  assert.deepEqual(routeErrorBody(formatted), { error: 'block not found', code: 'DOC_TARGET_NOT_FOUND' })
 })
 
 test('doc_state reports sessions, revisions and closes them', async () => {
