@@ -4,27 +4,63 @@ upstream/
 # Downloaded/build resources (Euro-Office, Tesseract, x2t)
 resources/
 
-# Isolated DSH state
+# Isolated DSH state and profiles
 .dsh-home/
 .dsh-desktop/
 .dsh-agents/
+.ndh-home/
+.ndh-desktop/
 
-# Node/build output
+# Local MCP / Playwright browser artifacts
+.playwright-mcp/
+
+# Node, package-manager and build output
 node_modules/
 dist/
 src-dist/
 out/
 .desktop-build/
+.pnpm-store/
+.turbo/
+*.tsbuildinfo
 
-# Secrets and downloads
+# Test output
+test-results/
+playwright-report/
+blob-report/
+coverage/
+.nyc_output/
+
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets, credentials and token files
 .env
 .env.*
+.credentials.yaml
+.credentials.yml
+.credentials.json
+*.key
+*.pem
+*.pfx
+*.p12
+*.token
+**/dsh-as-mcp/token
+
+# Downloaded archives and binaries
 *.zip
 *.7z
 *.exe
 
-# Local scratch verification workspace
+# Local scratch workspace and configuration exports (may contain credentials)
 scratch/
+exports/
 
 # Retired documents and backups: kept locally, never committed
 .agents/trash/
@@ -36,3 +72,14 @@ spike/**/out/
 spike/**/temp/
 spike/**/fontdata/
 spike/**/electron-user-data/
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.orig
