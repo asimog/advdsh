@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `workspace-legal-review` row: legal analyzers on `ctx.docxModel`, the
  * `doc_analyze` tool and the `legal-document-review` runtime skill.
  *

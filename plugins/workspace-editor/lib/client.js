@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Client half of the workspace editor plugin (hand-authored dynamic bundle).
  *
  * Stage 3's empty tab becomes the Stage 6 document editor: a right-sidebar tab
@@ -280,7 +280,7 @@ window.__ModuleLoader__.load({
           key: `${doc.id}:${reloadToken}`,
           ref: frameRef,
           src: routeUrl(`/host.html?doc=${encodeURIComponent(doc.id)}&rev=${reloadToken}&path=${encodeURIComponent(doc.path)}`),
-          sandbox: 'allow-scripts allow-same-origin allow-forms allow-downloads',
+          sandbox: 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads',
           style: styles.frame,
           title: doc.name,
         })

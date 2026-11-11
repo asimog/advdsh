@@ -1,4 +1,4 @@
-﻿'use strict'
+'use strict'
 
 // Hidden-Electron Document Builder sidecar for workspace-editor's ctx.docxEngine.
 //

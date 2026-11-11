@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Unit tests for the `doc_*` tool row over the real model with fake engine and
  * store fixtures: schemas, canonical values, write gating, runtime context and
  * the replayable presenters.

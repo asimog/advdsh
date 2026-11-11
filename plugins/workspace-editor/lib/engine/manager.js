@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Managed hidden-Electron Document Builder sidecar behind `ctx.docxEngine`.
  *
  * One child Electron process speaks newline-delimited JSON over stdin/stdout.

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Verification harness for `ctx.docxModel` (not part of the Cordis row).
  *
  * Proves the model over the real `ctx.docxEngine` and the real `editorDocuments`

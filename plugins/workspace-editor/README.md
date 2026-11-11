@@ -1,4 +1,4 @@
-﻿# workspace-editor
+# workspace-editor
 
 Version 0.3.0. The bundle provides the document model, agent tools, fan-out and
 legal review beside the Euro-Office editor; see the row sections below.

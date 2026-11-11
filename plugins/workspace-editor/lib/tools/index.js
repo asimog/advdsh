@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `workspace-docx-tools` row: the agent-facing `doc_*` tools, the
  * `document-model:open` runtime context and the read/write env gate.
  *

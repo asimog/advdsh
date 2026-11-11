@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Sidecar identity checks and the shared outline helper.
  */
 import assert from 'node:assert/strict'

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `workspace-docx-model` row: register `ctx.docxModel`, the per-activation
  * document session service the agent tools consume.
  *

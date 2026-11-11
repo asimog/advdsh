@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Shared fixtures for the model and tool unit tests: described-document
  * fixtures for the ten specification documents, an in-memory engine with the
  * real request/response shapes (including tracked text, run/markup data,

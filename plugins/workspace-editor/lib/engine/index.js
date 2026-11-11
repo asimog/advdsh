@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `workspace-docx-engine` row: the deterministic document engine behind
  * `ctx.docxEngine`, implemented as a managed hidden-Electron Document Builder
  * sidecar.

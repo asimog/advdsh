@@ -1,4 +1,4 @@
-﻿/**
+/**
  * x2t conversion for the editor plugin: one conversion at a time, a cleared
  * temp folder per run, and the font cache PDF export needs.
  *

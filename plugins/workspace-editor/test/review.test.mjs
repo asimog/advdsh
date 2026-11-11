@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Unit tests for the legal analyzers and the `workspace-legal-review` row:
  * planted defects, stable codes, code filtering, analyzer registration and the
  * `doc_analyze` tool over a fake model.

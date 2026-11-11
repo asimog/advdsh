@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Store contract tests: the mandatory base revision, save-as target checks,
  * backups, retention, the adapter backup/history seam and local history.
  * PDF fixtures avoid x2t so this file stays a unit test.

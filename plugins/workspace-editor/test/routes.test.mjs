@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Route contract tests: path confinement, the session query on document routes
  * and the session-filtered SSE snapshot. The host row is applied to a fake
  * Cordis context and its routes are served by a real loopback HTTP server.

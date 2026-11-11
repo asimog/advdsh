@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Host half of the workspace editor plugin.
  *
  * Serves the Euro-Office frontend and one host page from this origin, keeps a
@@ -23,6 +23,8 @@ export const name = 'workspace-editor'
 export const inject = ['webServer', 'tools']
 
 const ROUTE = '/workspace-editor'
+/** Content security policy of the host page (specification section 14.1). */
+export const HOST_PAGE_CSP = "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'self'"
 const editorDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'editor')
 /**
  * Editor frontend. The vendored Euro-Office Lite build is the default because
@@ -368,7 +370,8 @@ export function apply(ctx) {
   // --- host page and frontend -------------------------------------------------
   serve('exact', '/host.html', async (_req, res) => {
     try {
-      res.setHeader('content-security-policy', "default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; child-src 'self' blob:")
+      res.setHeader('content-security-policy', HOST_PAGE_CSP)
+      res.setHeader('x-content-type-options', 'nosniff')
       await serveFile(res, path.join(editorDir, 'host.html'))
     } catch (error) {
       log(`host page failed: ${error instanceof Error ? error.message : error}`)

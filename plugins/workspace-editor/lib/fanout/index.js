@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `workspace-docx-fanout` row: parallel editing over `ctx.subagents`.
  *
  * `doc_fanout` forks the parent session once per task, starts one child per fork

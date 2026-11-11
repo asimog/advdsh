@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Where the engine sidecar and its inputs live. Every path is an environment
  * override first, then a dev-workspace default, so the row loads even when the
  * binaries are missing: `ensureStarted` turns that into ENGINE_UNAVAILABLE with

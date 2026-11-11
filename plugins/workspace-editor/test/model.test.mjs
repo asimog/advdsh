@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Unit tests for `ctx.docxModel` (`lib/model/model.js`) over a fake engine and a
  * fake document store: no Electron, x2t or DSH context.
  */

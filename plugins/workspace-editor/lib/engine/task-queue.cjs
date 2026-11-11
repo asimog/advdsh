@@ -1,4 +1,4 @@
-﻿'use strict'
+'use strict'
 
 /** Escape one XML text node. @param {unknown} value - text. @returns {string} escaped text. */
 function xmlEscape(value) {

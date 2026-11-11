@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Unit tests for the `doc_fanout` tool over the real model, a fake engine and a
  * fake subagent manager: fork per task, caller delivery, bounded concurrency,
  * failure isolation, merge by block id and teardown.

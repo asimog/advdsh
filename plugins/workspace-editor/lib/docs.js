@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Document store for the editor plugin: one temp folder per open document, an
  * Editor.bin the editor works on, and DOCX/PDF written back through x2t.
  *

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AscDesktopEditor for the workspace editor: the members sdkjs calls in a
  * desktop host, answered over the plugin's HTTP routes instead of Tauri.
  *

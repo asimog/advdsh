@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 // Page half of the Document Builder sidecar.
 //

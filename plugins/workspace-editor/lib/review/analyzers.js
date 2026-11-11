@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Legal document analyzers for `ctx.docxModel.check` and `doc_analyze`.
  *
  * Pure functions over described blocks: no engine, no filesystem. Every finding

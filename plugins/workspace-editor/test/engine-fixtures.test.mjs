@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Real-engine describe contract: the sidecar's live text, tracked runs, table
  * ids, ambiguous targets, expected-text errors and opaque drawing runs.
  * Requires the installed Electron, Euro-Office and x2t used by the verifier.

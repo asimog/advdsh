@@ -1,4 +1,4 @@
-﻿/**
+/**
  * `ctx.docxModel` core: agent document sessions over `ctx.docxEngine`.
  *
  * Sessions are keyed by absolute path + content hash, so a reopen after a human

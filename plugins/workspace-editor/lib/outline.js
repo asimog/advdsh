@@ -1,4 +1,4 @@
-﻿/** Heading outline shared by the engine and the model. @param {object[]} blocks - described blocks. @returns {object[]} outline entries. */
+/** Heading outline shared by the engine and the model. @param {object[]} blocks - described blocks. @returns {object[]} outline entries. */
 export function outlineOf(blocks) {
   const outline = []
   for (const block of Array.isArray(blocks) ? blocks : []) {
