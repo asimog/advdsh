@@ -24,8 +24,8 @@ test('the sidecar denies navigation and new windows (WD-078)', async () => {
 })
 test('the client accepts selection messages only from its own iframe origin (WD-135)', async () => {
   const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.match(source, /event\.source !== frame\.contentWindow/)
-  assert.match(source, /event\.origin !== window\.location\.origin/)
+  assert.match(source, /message\.source !== input\.frameWindow/)
+  assert.match(source, /message\.origin !== input\.origin/)
 })
 
 test('the sidecar rejects a request with the wrong token (WD-136)', async () => {

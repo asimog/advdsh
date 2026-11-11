@@ -85,6 +85,37 @@ window.__ModuleLoader__.load({
       return typeof address === 'string' && address.startsWith(prefix) ? address.slice(prefix.length) : ''
     }
 
+    /**
+     * Validate one message from the editor iframe and return the selection to
+     * stage, or null when the message must be ignored: only this tab's own
+     * iframe, its own origin, real text, finite points and a known store
+     * revision open the selection menu (WD-075, WD-135).
+     * @param {{ message: object, frameWindow: object | null, origin: string, revision: string, path: string }} input - one window message.
+     * @returns {{ path: string, revision: string, text: string, dirty: boolean, x: number, y: number } | null} staged selection.
+     */
+    function selectionMessage(input) {
+      const message = input && input.message
+      if (message === null || typeof message !== 'object') return null
+      if (input.frameWindow === null || input.frameWindow === undefined) return null
+      if (message.source !== input.frameWindow) return null
+      if (message.origin !== input.origin) return null
+      const data = message.data
+      if (data === null || typeof data !== 'object') return null
+      if (data.type !== 'workspace-editor/selection') return null
+      if (typeof data.text !== 'string' || data.text.trim() === '') return null
+      if (typeof data.x !== 'number' || typeof data.y !== 'number') return null
+      if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) return null
+      if (typeof input.revision !== 'string' || input.revision === '') return null
+      return {
+        path: typeof input.path === 'string' ? input.path : '',
+        revision: input.revision,
+        text: data.text,
+        dirty: data.dirty === true,
+        x: data.x,
+        y: data.y,
+      }
+    }
+
     const styles = {
       root: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: '160px' },
       bar: {
@@ -257,24 +288,22 @@ window.__ModuleLoader__.load({
         if (doc === undefined || openSelectionMenu === undefined) return undefined
         const onMessage = (event) => {
           const frame = frameRef.current
-          if (frame === null || event.source !== frame.contentWindow) return
-          if (event.origin !== window.location.origin) return
-          const data = event.data
-          if (data === null || typeof data !== 'object') return
-          if (data.type !== 'workspace-editor/selection') return
-          if (typeof data.text !== 'string' || data.text.trim() === '') return
-          if (typeof data.x !== 'number' || typeof data.y !== 'number') return
-          if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) return
-          // A selection quote names the store revision it was taken at; without
-          // a known revision the menu would have to guess one.
-          if (loadedRevision === '') return
+          if (frame === null) return
+          const staged = selectionMessage({
+            message: event,
+            frameWindow: frame.contentWindow,
+            origin: window.location.origin,
+            revision: loadedRevision,
+            path: typeof doc.path === 'string' && doc.path !== '' ? doc.path : wanted,
+          })
+          if (staged === null) return
           const rect = frame.getBoundingClientRect()
           openSelectionMenu({
-            path: typeof doc.path === 'string' && doc.path !== '' ? doc.path : wanted,
-            revision: loadedRevision,
-            text: data.text,
-            dirty: data.dirty === true,
-          }, { x: rect.left + data.x, y: rect.top + data.y })
+            path: staged.path,
+            revision: staged.revision,
+            text: staged.text,
+            dirty: staged.dirty,
+          }, { x: rect.left + staged.x, y: rect.top + staged.y })
         }
         window.addEventListener('message', onMessage)
         return () => { window.removeEventListener('message', onMessage) }
@@ -663,6 +692,8 @@ window.__ModuleLoader__.load({
       }), 'workspace-editor.close')
     }
 
+    /** Pure tab guards; the unit test drives them without a browser. */
+    exports.__guards = { selectionMessage, pathFromAddress, toAddress }
     exports.apply = apply
     return module.exports
   },
