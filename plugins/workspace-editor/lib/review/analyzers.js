@@ -176,8 +176,8 @@ function listLevels({ blocks, checks }) {
 function definedTerms({ blocks, checks }) {
   const findings = []
   const described = blocksOf(blocks)
-  const definitionPattern = /(?:hereinafter|means|\(the\s+["â€œ]|\(["â€œ])/i
-  const quoted = /["â€œ]([A-Z][^"â€]{1,60})["â€]/g
+  const definitionPattern = /(?:hereinafter|means|\(the\s+["“]|\(["“])/i
+  const quoted = /["“]([A-Z][^"”]{1,60})["”]/g
   const definitions = new Map()
   described.forEach((block, index) => {
     const text = textOf(block.text)
@@ -227,8 +227,8 @@ function abbreviations({ blocks, checks, knownAbbreviations }) {
       const start = match.index ?? 0
       const before = text.slice(Math.max(0, start - 2), start)
       const after = text.slice(start + token.length, start + token.length + 2)
-      const introduced = before === '("' || before === 'â€œ' || /\(\s*["â€œ]?$/.test(text.slice(Math.max(0, start - 4), start))
-        || after === '")' || after === 'â€'
+      const introduced = before === '("' || before === '“' || /\(\s*["“]?$/.test(text.slice(Math.max(0, start - 4), start))
+        || after === '")' || after === '”'
       if (introduced) continue
       if (!firstUse.has(token)) firstUse.set(token, { block, index, introduced })
     }

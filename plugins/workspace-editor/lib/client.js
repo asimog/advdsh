@@ -39,25 +39,25 @@ window.__ModuleLoader__.load({
       'copy.failed': 'Could not copy the selection.',
     }
     const hi = {
-      'tab.title': 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤•',
-      'guide.title': 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤•',
-      'guide.description': 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤¨ à¤•à¥‡ à¤²à¤¿à¤ à¤µà¤°à¥à¤¡ à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤¯à¤¾ à¤ªà¥€à¤¡à¥€à¤à¤«à¤¼ à¤–à¥‹à¤²à¥‡à¤‚',
-      empty: 'à¤•à¥‹à¤ˆ à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤–à¥à¤²à¤¾ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆ',
-      edit: 'à¤¸à¤‚à¤ªà¤¾à¤¦à¤¿à¤¤ à¤•à¤°à¥‡à¤‚',
-      reload: 'à¤«à¤¿à¤° à¤²à¥‹à¤¡ à¤•à¤°à¥‡à¤‚',
-      'exportPdf': 'à¤ªà¥€à¤¡à¥€à¤à¤«à¤¼ à¤¨à¤¿à¤°à¥à¤¯à¤¾à¤¤',
-      opening: 'à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤–à¥à¤² à¤°à¤¹à¤¾ à¤¹à¥ˆ...',
-      failed: 'à¤¦à¤¸à¥à¤¤à¤¾à¤µà¥‡à¤œà¤¼ à¤¨à¤¹à¥€à¤‚ à¤–à¥à¤² à¤¸à¤•à¤¾',
-      'waiting': '.docx à¤¯à¤¾ .pdf à¤ªà¥‚à¤°à¥à¤µà¤¾à¤µà¤²à¥‹à¤•à¤¨ à¤–à¥‹à¤²à¥‡à¤‚ à¤”à¤° à¤¸à¤‚à¤ªà¤¾à¤¦à¤¿à¤¤ à¤•à¤°à¥‡à¤‚ à¤šà¥à¤¨à¥‡à¤‚à¥¤',
-      'menu.sendToChat': 'à¤šà¥ˆà¤Ÿ à¤®à¥‡à¤‚ à¤­à¥‡à¤œà¥‡à¤‚',
-      'menu.askAgent': 'à¤à¤œà¥‡à¤‚à¤Ÿ à¤¸à¥‡ à¤ªà¥‚à¤›à¥‡à¤‚',
-      'menu.copy': 'à¤•à¥‰à¤ªà¥€ à¤•à¤°à¥‡à¤‚',
-      'menu.failed': 'à¤®à¥‡à¤¨à¥‚ à¤•à¤¾à¤°à¥à¤°à¤µà¤¾à¤ˆ à¤ªà¥‚à¤°à¥€ à¤¨à¤¹à¥€à¤‚ à¤¹à¥‹ à¤¸à¤•à¥€à¥¤',
-      'stage.source': '`{path}` à¤¸à¥‡ à¤¸à¤‚à¤¶à¥‹à¤§à¤¨ {revision} à¤ªà¤°à¥¤',
-      'stage.dirty': '(à¤¸à¤‚à¤ªà¤¾à¤¦à¤• à¤®à¥‡à¤‚ à¤¸à¤¹à¥‡à¤œà¥‡ à¤¨ à¤—à¤ à¤¬à¤¦à¤²à¤¾à¤µ à¤¹à¥ˆà¤‚)',
-      'stage.unavailable': 'à¤¯à¤¹ à¤šà¥ˆà¤Ÿ à¤…à¤­à¥€ à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤',
-      'stage.failed': 'à¤•à¤‚à¤ªà¥‹à¤œà¤¼à¤° à¤µà¥à¤¯à¤¸à¥à¤¤ à¤¹à¥ˆ; à¤šà¤¯à¤¨ à¤œà¤®à¤¾ à¤¨à¤¹à¥€à¤‚ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾à¥¤',
-      'copy.failed': 'à¤šà¤¯à¤¨ à¤•à¥‰à¤ªà¥€ à¤¨à¤¹à¥€à¤‚ à¤¹à¥‹ à¤¸à¤•à¤¾à¥¤',
+      'tab.title': 'संपादक',
+      'guide.title': 'संपादक',
+      'guide.description': 'संपादन के लिए वर्ड दस्तावेज़ या पीडीएफ़ खोलें',
+      empty: 'कोई दस्तावेज़ खुला नहीं है',
+      edit: 'संपादित करें',
+      reload: 'फिर लोड करें',
+      'exportPdf': 'पीडीएफ़ निर्यात',
+      opening: 'दस्तावेज़ खुल रहा है...',
+      failed: 'दस्तावेज़ नहीं खुल सका',
+      'waiting': '.docx या .pdf पूर्वावलोकन खोलें और संपादित करें चुनें।',
+      'menu.sendToChat': 'चैट में भेजें',
+      'menu.askAgent': 'एजेंट से पूछें',
+      'menu.copy': 'कॉपी करें',
+      'menu.failed': 'मेनू कार्रवाई पूरी नहीं हो सकी।',
+      'stage.source': '`{path}` से संशोधन {revision} पर।',
+      'stage.dirty': '(संपादक में सहेजे न गए बदलाव हैं)',
+      'stage.unavailable': 'यह चैट अभी उपलब्ध नहीं है।',
+      'stage.failed': 'कंपोज़र व्यस्त है; चयन जमा नहीं किया गया।',
+      'copy.failed': 'चयन कॉपी नहीं हो सका।',
     }
 
     /** Host document id per tab address, so closing one tab closes only its document. */
@@ -320,7 +320,7 @@ window.__ModuleLoader__.load({
       const EditAction = makeEditAction(openEditor)
 
       const quoteLimit = 8000
-      const truncate = (text) => text.length <= quoteLimit ? text : `${text.slice(0, quoteLimit)}â€¦`
+      const truncate = (text) => text.length <= quoteLimit ? text : `${text.slice(0, quoteLimit)}…`
       const quoteFor = (value) => {
         const body = truncate(value.text).split('\n').map((line) => `> ${line}`).join('\n')
         const source = t('stage.source', { path: value.path, revision: String(value.revision) })

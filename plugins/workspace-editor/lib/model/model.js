@@ -135,7 +135,7 @@ function estimateTokens(text) {
 /** @param {string} text - block text. @param {number} limit - character cap. @returns {string} */
 function clip(text, limit = 500) {
   const value = typeof text === 'string' ? text : ''
-  return value.length <= limit ? value : `${value.slice(0, limit)}â€¦`
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`
 }
 
 /** Heading rows derived from paragraph style/level. */
@@ -508,10 +508,12 @@ export function createDocxModel(options) {
       let absolute
       let bytes
       let name
+      // A relative path is relative to the session workspace root, not to the process directory.
+      const base = typeof openOptions.cwd === 'string' && openOptions.cwd !== '' ? openOptions.cwd : process.cwd()
       if (typeof input === 'string') {
-        absolute = path.resolve(input)
+        absolute = path.resolve(base, input)
       } else if (input && typeof input === 'object') {
-        if (typeof input.path === 'string' && input.path !== '') absolute = path.resolve(input.path)
+        if (typeof input.path === 'string' && input.path !== '') absolute = path.resolve(base, input.path)
         if (input.bytes !== undefined) bytes = toBytes(input.bytes)
         if (typeof input.name === 'string' && input.name !== '') name = input.name
       }
@@ -727,7 +729,7 @@ export function createDocxModel(options) {
             id: block.id,
             index: block.index,
             kind: block.kind,
-            snippet: clip(`${start > 0 ? 'â€¦' : ''}${block.text.slice(start, start + 220)}`, 240),
+            snippet: clip(`${start > 0 ? '…' : ''}${block.text.slice(start, start + 220)}`, 240),
           })
           if (matches.length >= limit) break
         }

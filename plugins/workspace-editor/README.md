@@ -40,13 +40,13 @@ Serves one origin under `ctx.webServer`:
 | `GET /workspace-editor/host.html?doc=<id>` | Host page: shim, `api.js`, boot. |
 | `GET /workspace-editor/shim.js`, `/boot.js` | `window.AscDesktopEditor` and the document loader. |
 | `GET /workspace-editor/app/*` | `web-apps`, `sdkjs`, `fonts` from the Euro-Office release build (precompiled CSS), served `immutable`. `sdkjs/common/AllFonts.js` is answered with the generated font cache, which is what makes real documents render. |
-| `POST /workspace-editor/api/open` | `{ path }` â†’ `{ id, name, kind }`; DOCX is converted to `Editor.bin` in a per-document temp folder. |
+| `POST /workspace-editor/api/open` | `{ path }` → `{ id, name, kind }`; DOCX is converted to `Editor.bin` in a per-document temp folder. |
 | `GET /workspace-editor/api/info` | Name, kind, path, file mtime, modified flag. |
 | `GET /workspace-editor/api/bin` | The bytes the editor opens. |
-| `POST /workspace-editor/api/save` | Editor bytes â†’ x2t â†’ the document's own path, renamed atomically. |
+| `POST /workspace-editor/api/save` | Editor bytes → x2t → the document's own path, renamed atomically. |
 | `POST /workspace-editor/api/save-as?path=` | Same, to another path. |
 | `POST /workspace-editor/api/close` | Tab closed: drop the doc session and delete its temp folder. |
-| `GET /workspace-editor/api/pdf` | DOCX â†’ PDF through x2t with the font cache. |
+| `GET /workspace-editor/api/pdf` | DOCX → PDF through x2t with the font cache. |
 | `GET /workspace-editor/api/font?path=` | Font bytes for the generated font list only. |
 | `GET /workspace-editor/api/media/<doc>/<name>` | Per-document media folder for inserted images. |
 
@@ -180,7 +180,7 @@ over described blocks, so `doc_check` and `doc_analyze` share one finding set.
 | `UNDEFINED_ABBREVIATION` | An abbreviation whose first use is not introduced in parentheses; all-caps headings are skipped and citation markers are excluded. |
 | `CROSS_REFERENCE_MISSING` | An `Exhibit`/`Annexure`/`Schedule` reference with no target heading or leading block. |
 | `CITATION_SHAPE` | A reporter citation that does not match the configured pattern (Indian Supreme Court `SCC`/`AIR` by default). |
-| `PLACEHOLDER_TEXT` | `TBD`, `TODO`, `[insert â€¦]`, `<<â€¦>>` and similar text left in the document. |
+| `PLACEHOLDER_TEXT` | `TBD`, `TODO`, `[insert …]`, `<<…>>` and similar text left in the document. |
 | `EMPTY_PARAGRAPH_RUN` | Three or more consecutive empty paragraphs. |
 | `TABLE_HEADER_MISSING` | A table whose first row has no text. |
 

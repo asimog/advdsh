@@ -585,7 +585,7 @@ export function apply(ctx) {
         return {
           card: 'generic',
           title: meta.applied ? `Committed ${meta.path ?? 'document'}` : 'No pending edits',
-          content: meta.applied ? `revision ${String(meta.revision ?? '').slice(0, 12)}${Number.isFinite(meta.size) ? ` Â· ${meta.size} bytes` : ''}` : undefined,
+          content: meta.applied ? `revision ${String(meta.revision ?? '').slice(0, 12)}${Number.isFinite(meta.size) ? ` · ${meta.size} bytes` : ''}` : undefined,
         }
       },
       async execute(args) {
@@ -811,14 +811,13 @@ export function apply(ctx) {
               properties: {
                 handle: { type: 'string' },
                 path: { type: 'string' },
-            pendingOps: { type: 'number' },
                 baseRevision: { type: 'string' },
                 readMode: { type: 'string' },
                 stale: { type: 'boolean' },
                 pendingOps: { type: 'number' },
                 editorDirty: { type: 'boolean' },
               },
-              required: ['handle', 'path', 'revision', 'baseRevision', 'readMode', 'stale', 'pendingOps', 'editorDirty'],
+              required: ['handle', 'path', 'baseRevision', 'readMode', 'stale', 'pendingOps', 'editorDirty'],
               additionalProperties: true,
             },
           },
@@ -1007,7 +1006,7 @@ function engineStatus(ctx) {
 /** @param {unknown} text - block text. @param {number} limit - cap. @returns {string} */
 function clip(text, limit) {
   const value = typeof text === 'string' ? text : ''
-  return value.length <= limit ? value : `${value.slice(0, limit)}â€¦`
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`
 }
 
 

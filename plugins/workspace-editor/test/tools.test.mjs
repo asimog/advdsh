@@ -421,3 +421,44 @@ test('only an applier child may edit, and only inside its chunk (WD-116, WD-117,
   const markup = await booted.tools.get('doc_read').execute({ doc: childDoc.handle, mode: 'markup' }, child)
   assert.ok(Array.isArray(markup.nodes))
 })
+
+/** Collect schema nodes whose `required` names a property that is not declared. */
+function schemaViolations(schema, where, out = []) {
+  if (schema === null || typeof schema !== 'object') return out
+  if (Array.isArray(schema.required) && schema.properties && typeof schema.properties === 'object') {
+    for (const name of schema.required) {
+      if (!Object.hasOwn(schema.properties, name)) out.push(`${where}: required "${name}" is not in properties`)
+    }
+  }
+  if (schema.properties && typeof schema.properties === 'object') {
+    for (const [name, child] of Object.entries(schema.properties)) schemaViolations(child, `${where}.${name}`, out)
+  }
+  if (schema.items) schemaViolations(schema.items, `${where}[]`, out)
+  for (const key of ['oneOf', 'anyOf', 'allOf']) {
+    if (Array.isArray(schema[key])) schema[key].forEach((child, index) => schemaViolations(child, `${where}.${key}[${index}]`, out))
+  }
+  return out
+}
+
+test('every tool schema lists only declared properties as required', () => {
+  const { tools } = boot({ documents: true })
+  const violations = []
+  for (const [name, definition] of tools) {
+    schemaViolations(definition.parameters, `${name}.parameters`, violations)
+    schemaViolations(definition.output?.schema, `${name}.output`, violations)
+  }
+  assert.deepEqual(violations, [])
+})
+
+test('doc_open resolves a relative path against the session workspace root (WD-079)', async (t) => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'workspace-tools-relative-'))
+  t.after(() => rm(base, { recursive: true, force: true }))
+  const root = path.join(base, 'work')
+  await mkdir(root)
+  await writeFile(path.join(root, 'B.docx'), 'B')
+  const booted = boot()
+  const exec = { agent: { session: { header: { id: 'S1', cwd: root } } }, signal: new AbortController().signal }
+  const opened = await booted.tools.get('doc_open').execute({ path: 'B.docx' }, exec)
+  const { realpath } = await import('node:fs/promises')
+  assert.equal(await realpath(opened.path), await realpath(path.join(root, 'B.docx')))
+})
