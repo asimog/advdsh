@@ -122,6 +122,16 @@ test('writes are refused when the gate is off; commit needs the shared store', a
   )
 })
 
+test('a redline read annotates tracked runs and a plain read does not (WD-112)', async () => {
+  const engine = createFakeEngine(fixtureBlocks('F-TRACKED').blocks)
+  const { model } = createModel({ engine })
+  const opened = await model.open('C:/docs/F-TRACKED.docx')
+  const plain = await model.read(opened.handle, { mode: 'full' })
+  assert.equal(plain.text, '[w14:1] Paid to the Respondent.')
+  const redline = await model.read(opened.handle, { mode: 'full', redline: true })
+  assert.equal(redline.text, '[w14:1] Paid to the <del>r</del><ins>R</ins>espondent.')
+})
+
 test('commit refuses a dirty editor and a stale base, then writes through the store', async () => {
   const documents = createFakeDocuments()
   const { model, engine } = createModel({ documents })

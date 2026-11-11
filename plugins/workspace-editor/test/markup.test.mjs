@@ -55,15 +55,16 @@ test('the markup view reports tables, cells and sections', () => {
   assert.equal(clean.nodes.at(-1).props.orientation, 'portrait')
 })
 
-test('the markup view truncates at the node limit and reports next', () => {
-  const limited = buildMarkupView({ blocks: describePayload(fixtureBlocks('F-LARGE').blocks).blocks }, { limitNodes: 400 })
-  assert.equal(limited.nodes.length, 400)
+test('the markup view truncates at the node limit and reports next (WD-029)', () => {
+  // A markup node counts as one node per paragraph and one per run: F-LARGE has
+  // 500 one-run paragraphs, so 400 nodes are 200 paragraphs and next is 200.
+  const large = describePayload(fixtureBlocks('F-LARGE').blocks).blocks
+    .map((block) => ({ ...block, runs: [{ text: block.text }] }))
+  const limited = buildMarkupView({ blocks: large }, { limitNodes: 400 })
+  assert.equal(limited.nodes.length, 200)
   assert.equal(limited.truncated, true)
-  assert.equal(limited.next, 400)
-  const tail = buildMarkupView(
-    { blocks: describePayload(fixtureBlocks('F-LARGE').blocks).blocks },
-    { from: 400, limitNodes: 100 },
-  )
+  assert.equal(limited.next, 200)
+  const tail = buildMarkupView({ blocks: large }, { from: 400, limitNodes: 200 })
   assert.equal(tail.nodes.length, 100)
   assert.equal(tail.nodes[0].index, 400)
   assert.equal(tail.truncated, false)
